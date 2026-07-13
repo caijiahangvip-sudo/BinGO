@@ -87,6 +87,42 @@ fn stop_server(state: &ServerState) {
 }
 
 #[tauri::command]
+fn desktop_system_proxy() -> Option<String> {
+  #[cfg(target_os = "windows")]
+  {
+    let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+    let enabled = Command::new("reg.exe")
+      .args(["query", key, "/v", "ProxyEnable"])
+      .output()
+      .ok()?;
+    if !String::from_utf8_lossy(&enabled.stdout).contains("0x1") {
+      return None;
+    }
+    let server = Command::new("reg.exe")
+      .args(["query", key, "/v", "ProxyServer"])
+      .output()
+      .ok()?;
+    let output = String::from_utf8_lossy(&server.stdout);
+    let value = output
+      .lines()
+      .find(|line| line.contains("ProxyServer"))?
+      .split_whitespace()
+      .last()?;
+    let address = value
+      .split(';')
+      .find_map(|entry| entry.strip_prefix("https=").or_else(|| entry.strip_prefix("http=")))
+      .unwrap_or(value);
+    return Some(if address.contains("://") {
+      address.to_string()
+    } else {
+      format!("http://{address}")
+    });
+  }
+  #[cfg(not(target_os = "windows"))]
+  None
+}
+
+#[tauri::command]
 async fn start_bingo_server(app: AppHandle) -> Result<(), String> {
   let state = app.state::<ServerState>();
   if state.0.lock().map_err(|_| "无法访问服务状态")?.is_some() {
@@ -152,7 +188,7 @@ pub fn run() {
         let _ = window.set_focus();
       }
     }))
-    .invoke_handler(tauri::generate_handler![start_bingo_server])
+    .invoke_handler(tauri::generate_handler![start_bingo_server, desktop_system_proxy])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;

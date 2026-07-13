@@ -1,6 +1,6 @@
 [package]
 name = "bingo"
-version = "0.1.1"
+version = "0.1.2"
 description = "BinGO AI interactive classroom desktop client"
 authors = ["BinGO contributors"]
 license = "AGPL-3.0"
@@ -27,7 +27,7 @@ tauri-plugin-http = "2.5.8"
 tauri-plugin-fs = "2.5.0"
 tauri-plugin-shell = "2.3.5"
 tauri-plugin-process = "2"
-tauri-plugin-updater = "2"
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "zip"] }
 tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]

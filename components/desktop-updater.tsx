@@ -17,11 +17,19 @@ export function DesktopUpdater() {
     const timer = window.setTimeout(async () => {
       setState('checking');
       try {
-        const [{ check }, { relaunch }] = await Promise.all([
+        const [{ check }, { relaunch }, { invoke }] = await Promise.all([
           import('@tauri-apps/plugin-updater'),
           import('@tauri-apps/plugin-process'),
+          import('@tauri-apps/api/core'),
         ]);
-        const update = await check();
+        let update;
+        try {
+          update = await check();
+        } catch (directError) {
+          const proxy = await invoke<string | null>('desktop_system_proxy');
+          if (!proxy) throw directError;
+          update = await check({ proxy });
+        }
         if (!update) {
           setState('idle');
           return;
@@ -50,6 +58,10 @@ export function DesktopUpdater() {
       } catch (error) {
         setState('error');
         console.warn('[DesktopUpdater] Update check failed:', error);
+        toast.error('检查更新失败', {
+          description: '暂时无法连接更新服务器，请检查网络或代理设置后重启 BinGO。',
+          duration: 10000,
+        });
       }
     }, 5000);
     return () => window.clearTimeout(timer);

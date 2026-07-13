@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "BinGO",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "app.bingo.desktop",
   "build": {
     "frontendDist": "../desktop-loader",
@@ -30,9 +30,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "nsis"
-    ],
+    "targets": ["nsis"],
     "resources": {
       "../desktop-dist/server": "server",
       "binaries/node.exe": "binaries/node.exe"
@@ -44,12 +42,7 @@
         "displayLanguageSelector": false
       }
     },
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.ico"
-    ]
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"]
   },
   "plugins": {
     "updater": {
