@@ -1615,6 +1615,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection }: SettingsD
                     normalizeVectorProviderId(selectedVectorProviderId) as VectorProviderId
                   ]) && (
                   <VectorSettings
+                    key={selectedVectorProviderId}
                     selectedProviderId={
                       normalizeVectorProviderId(selectedVectorProviderId) as VectorProviderId
                     }

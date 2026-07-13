@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,12 +49,6 @@ export function VectorSettings({ selectedProviderId }: VectorSettingsProps) {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
   const [localBaseUrlInput, setLocalBaseUrlInput] = useState(selectedProviderConfig?.baseUrl || '');
-
-  useEffect(() => {
-    setLocalBaseUrlInput(selectedProviderConfig?.baseUrl || '');
-    setTestStatus('idle');
-    setTestMessage('');
-  }, [selectedProviderId]);
 
   const handleModelsChange = useCallback(
     (models: ServiceModelInfo[]) => {
@@ -137,6 +131,7 @@ export function VectorSettings({ selectedProviderId }: VectorSettingsProps) {
       requiresApiKey,
       localBaseUrlInput,
       selectedProviderConfig?.apiKey,
+      selectedProviderConfig?.baseUrl,
       selectedProviderId,
       t,
     ],
