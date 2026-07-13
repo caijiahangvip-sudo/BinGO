@@ -13,6 +13,7 @@
   "permissions": [
     "core:default",
     "allow-desktop-system-proxy",
+    "allow-start-bingo-server",
     "process:allow-restart",
     "updater:default"
   ]

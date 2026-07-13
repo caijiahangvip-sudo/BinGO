@@ -2,3 +2,8 @@
 identifier = "allow-desktop-system-proxy"
 description = "Allows the BinGO desktop window to read the enabled Windows system proxy."
 commands.allow = ["desktop_system_proxy"]
+
+[[permission]]
+identifier = "allow-start-bingo-server"
+description = "Allows the BinGO desktop window to start its bundled local server."
+commands.allow = ["start_bingo_server"]
