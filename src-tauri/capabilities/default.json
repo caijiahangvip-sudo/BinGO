@@ -12,6 +12,7 @@
   },
   "permissions": [
     "core:default",
+    "allow-desktop-system-proxy",
     "process:allow-restart",
     "updater:default"
   ]

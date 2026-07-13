@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-desktop-system-proxy"
+description = "Allows the BinGO desktop window to read the enabled Windows system proxy."
+commands.allow = ["desktop_system_proxy"]
