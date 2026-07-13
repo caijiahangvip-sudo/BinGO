@@ -28,6 +28,7 @@ export interface CreateSceneParams {
   content?: Partial<SceneContent>;
   order?: number;
   actions?: Action[];
+  learningContext?: Scene['learningContext'];
 }
 
 /**

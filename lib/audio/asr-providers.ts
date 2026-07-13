@@ -149,6 +149,8 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { experimental_transcribe as transcribe } from 'ai';
 import type { ASRModelConfig } from './types';
 import { ASR_PROVIDERS } from './constants';
+import { stripEndpointPath } from '@/lib/utils/api-url';
+import { resolveEndpointUrl } from '@/lib/utils/api-url';
 
 /**
  * Result of ASR transcription
@@ -184,9 +186,79 @@ export async function transcribeAudio(
     case 'qwen-asr':
       return await transcribeQwenASR(config, audioBuffer);
 
+    case 'sensevoice-asr':
+      return await transcribeSenseVoiceASR(config, audioBuffer);
+
     default:
       throw new Error(`Unsupported ASR provider: ${config.providerId}`);
   }
+}
+
+/**
+ * SenseVoice implementation (local FastAPI service).
+ */
+async function transcribeSenseVoiceASR(
+  config: ASRModelConfig,
+  audioBuffer: Buffer | Blob,
+): Promise<ASRTranscriptionResult> {
+  const endpointUrl = resolveEndpointUrl(
+    config.baseUrl,
+    ASR_PROVIDERS['sensevoice-asr'].defaultBaseUrl,
+    '/transcribe',
+  );
+
+  let audioBlob: Blob;
+  if (audioBuffer instanceof Buffer) {
+    audioBlob = new Blob(
+      [
+        audioBuffer.buffer.slice(
+          audioBuffer.byteOffset,
+          audioBuffer.byteOffset + audioBuffer.byteLength,
+        ) as ArrayBuffer,
+      ],
+      { type: 'audio/webm' },
+    );
+  } else if (audioBuffer instanceof Blob) {
+    audioBlob = audioBuffer;
+  } else {
+    throw new Error('Invalid audio buffer type');
+  }
+
+  const formData = new FormData();
+  formData.set('audio', audioBlob, 'audio.webm');
+  formData.set('model', config.modelId || ASR_PROVIDERS['sensevoice-asr'].defaultModelId);
+  formData.set('language', config.language || 'auto');
+
+  let response: Response;
+  try {
+    response = await fetch(endpointUrl, {
+      method: 'POST',
+      body: formData,
+    });
+  } catch (error) {
+    const baseUrl =
+      (config.baseUrl || ASR_PROVIDERS['sensevoice-asr'].defaultBaseUrl || '').trim() ||
+      'http://localhost:50001';
+    throw new Error(
+      `SenseVoice local service is not reachable at ${baseUrl}. Start scripts/sensevoice-local-server.ps1 first. ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`SenseVoice local ASR API error: ${errorText || response.statusText}`);
+  }
+
+  const data = await response.json();
+  const text =
+    typeof data?.text === 'string'
+      ? data.text
+      : typeof data?.result === 'string'
+        ? data.result
+        : typeof data?.transcript === 'string'
+          ? data.transcript
+          : '';
+  return { text };
 }
 
 /**
@@ -198,7 +270,9 @@ async function transcribeOpenAIWhisper(
 ): Promise<ASRTranscriptionResult> {
   const openai = createOpenAI({
     apiKey: config.apiKey!,
-    baseURL: config.baseUrl || ASR_PROVIDERS['openai-whisper'].defaultBaseUrl,
+    baseURL:
+      stripEndpointPath(config.baseUrl, ['/audio/transcriptions']) ||
+      ASR_PROVIDERS['openai-whisper'].defaultBaseUrl,
   });
 
   // Convert to Buffer or Uint8Array (which is required by the AI SDK)
@@ -225,7 +299,7 @@ async function transcribeOpenAIWhisper(
 
     return { text: result.text || '' };
   } catch (error: unknown) {
-    // Short/silent audio may cause the SDK to throw — treat as empty transcription
+    // Short/silent audio may cause the SDK to throw - treat as empty transcription
     const errMsg = error instanceof Error ? error.message : '';
     if (errMsg.includes('empty') || errMsg.includes('too short')) {
       return { text: '' };
@@ -293,7 +367,7 @@ async function transcribeQwenASR(
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    // "The audio is empty" — treat as no speech detected
+    // "The audio is empty" - treat as no speech detected
     if (errorText.includes('audio is empty') || errorText.includes('InvalidParameter')) {
       return { text: '' };
     }

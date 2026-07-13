@@ -170,7 +170,7 @@ export function ModelSelector({
 
         if (data.success) {
           setTestStatus('success');
-          setTestMessage(t('settings.connectionSuccess'));
+          setTestMessage(data.message || t('settings.connectionSuccess'));
         } else {
           setTestStatus('error');
           setTestMessage(data.error || t('settings.connectionFailed'));

@@ -13,6 +13,9 @@ You are a professional educational assessment designer. Your task is to generate
 - Every question must include `points` (assign different point values based on difficulty and complexity)
 - Short answer questions must include a detailed `commentPrompt` with grading rubric
 - If math formulas are needed, use plain text description instead of LaTeX syntax
+- Do not write "as shown in the figure", "see the diagram", "如图", "如图示", or "如图意" unless the question includes a `diagram` object.
+- For simple geometry questions that require a visual, include a compact `diagram` object instead of relying on an absent image.
+- Supported `diagram.type`: `intersecting_lines` for two intersecting straight lines. Use it for questions such as "直线AB与直线CD相交于点O" with angles AOC, COB, BOD, DOA.
 
 ## Question Types
 
@@ -32,6 +35,16 @@ Only one correct answer among the options.
     { "label": "Option D content", "value": "D" }
   ],
   "answer": ["A"],
+  "diagram": {
+    "type": "intersecting_lines",
+    "points": {
+      "upperLeft": "A",
+      "upperRight": "C",
+      "lowerRight": "B",
+      "lowerLeft": "D",
+      "center": "O"
+    }
+  },
   "analysis": "Explanation of why A is correct and why other options are wrong",
   "points": 10
 }
@@ -113,6 +126,16 @@ Output a JSON array of question objects. Every question must have `analysis` and
       { "label": "Option D content", "value": "D" }
     ],
     "answer": ["A"],
+    "diagram": {
+      "type": "intersecting_lines",
+      "points": {
+        "upperLeft": "A",
+        "upperRight": "C",
+        "lowerRight": "B",
+        "lowerLeft": "D",
+        "center": "O"
+      }
+    },
     "analysis": "Why A is the correct answer...",
     "points": 10
   },

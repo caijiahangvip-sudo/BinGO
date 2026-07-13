@@ -1,6 +1,6 @@
 import type { TTSProviderId } from '@/lib/audio/types';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
-import { TTS_PROVIDERS } from '@/lib/audio/constants';
+import { TTS_PROVIDERS, getTTSVoices } from '@/lib/audio/constants';
 
 export interface ResolvedVoice {
   providerId: TTSProviderId;
@@ -20,6 +20,17 @@ export function resolveAgentVoice(
 ): ResolvedVoice {
   // Agent-specific config
   if (agent.voiceConfig) {
+    const availableProvider = availableProviders.find(
+      (provider) => provider.providerId === agent.voiceConfig?.providerId,
+    );
+    if (availableProvider?.voices.some((voice) => voice.id === agent.voiceConfig?.voiceId)) {
+      return {
+        providerId: agent.voiceConfig.providerId,
+        modelId: agent.voiceConfig.modelId,
+        voiceId: agent.voiceConfig.voiceId,
+      };
+    }
+
     // Browser-native voices are dynamic (not in static registry), so skip validation
     if (agent.voiceConfig.providerId === 'browser-native-tts') {
       return {
@@ -56,9 +67,7 @@ export function resolveAgentVoice(
  */
 export function getServerVoiceList(providerId: TTSProviderId): string[] {
   if (providerId === 'browser-native-tts') return [];
-  const provider = TTS_PROVIDERS[providerId];
-  if (!provider) return [];
-  return provider.voices.map((v) => v.id);
+  return getTTSVoices(providerId).map((v) => v.id);
 }
 
 export interface ModelVoiceGroup {
@@ -82,30 +91,46 @@ export interface ProviderWithVoices {
 export function getAvailableProvidersWithVoices(
   ttsProvidersConfig: Record<
     string,
-    { apiKey?: string; enabled?: boolean; isServerConfigured?: boolean }
+    {
+      apiKey?: string;
+      enabled?: boolean;
+      isServerConfigured?: boolean;
+      name?: string;
+      icon?: string;
+      requiresApiKey?: boolean;
+      compatibleProviderId?: TTSProviderId;
+      providerOptions?: Record<string, unknown>;
+    }
   >,
 ): ProviderWithVoices[] {
   const result: ProviderWithVoices[] = [];
 
-  for (const [id, config] of Object.entries(TTS_PROVIDERS)) {
+  for (const [id, providerConfig] of Object.entries(ttsProvidersConfig)) {
     const providerId = id as TTSProviderId;
-    if (providerId === 'browser-native-tts') continue;
-    if (config.voices.length === 0) continue;
+    const compatibleProviderId = providerConfig.compatibleProviderId || providerId;
+    if (compatibleProviderId === 'browser-native-tts') continue;
+    const config = TTS_PROVIDERS[compatibleProviderId];
+    if (!config || config.voices.length === 0) continue;
 
-    const providerConfig = ttsProvidersConfig[providerId];
-    const hasApiKey = providerConfig?.apiKey && providerConfig.apiKey.trim().length > 0;
-    const isServerConfigured = providerConfig?.isServerConfigured === true;
+    const requiresApiKey = providerConfig.requiresApiKey ?? config.requiresApiKey;
+    const hasApiKey = providerConfig.apiKey && providerConfig.apiKey.trim().length > 0;
+    const isServerConfigured = providerConfig.isServerConfigured === true;
 
-    if (hasApiKey || isServerConfigured) {
+    if (!requiresApiKey || hasApiKey || isServerConfigured) {
       const allVoices = config.voices.map((v) => ({ id: v.id, name: v.name }));
 
       // Build model groups
       const modelGroups: ModelVoiceGroup[] = [];
       if (config.models.length > 0) {
         for (const model of config.models) {
-          const compatibleVoices = config.voices
-            .filter((v) => !v.compatibleModels || v.compatibleModels.includes(model.id))
-            .map((v) => ({ id: v.id, name: v.name }));
+          const compatibleVoices = getTTSVoices(
+            compatibleProviderId,
+            model.id,
+            providerConfig.providerOptions,
+          ).map((v) => ({
+            id: v.id,
+            name: v.name,
+          }));
           modelGroups.push({
             modelId: model.id,
             modelName: model.name,
@@ -123,7 +148,7 @@ export function getAvailableProvidersWithVoices(
 
       result.push({
         providerId,
-        providerName: config.name,
+        providerName: providerConfig.name || config.name,
         voices: allVoices,
         modelGroups,
       });

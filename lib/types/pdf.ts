@@ -1,6 +1,6 @@
 /**
  * PDF parsing result types
- * Extended to support advanced features from providers like MinerU
+ * Shared response shape used by PDF parsers.
  */
 
 /**
@@ -13,21 +13,24 @@ export interface ParsedPdfContent {
   /** Array of images as base64 data URLs */
   images: string[];
 
-  /** Extracted tables (MinerU feature) */
+  /** Rendered first page preview, used as book cover in long-term plans */
+  coverImage?: string;
+
+  /** Optional extracted tables from advanced parsers */
   tables?: Array<{
     page: number;
     data: string[][];
     caption?: string;
   }>;
 
-  /** Extracted formulas (MinerU feature) */
+  /** Optional extracted formulas from advanced parsers */
   formulas?: Array<{
     page: number;
     latex: string;
     position?: { x: number; y: number; width: number; height: number };
   }>;
 
-  /** Layout analysis (MinerU feature) */
+  /** Optional layout analysis from advanced parsers */
   layout?: Array<{
     page: number;
     type: 'title' | 'text' | 'image' | 'table' | 'formula';
@@ -40,9 +43,9 @@ export interface ParsedPdfContent {
     fileName?: string;
     fileSize?: number;
     pageCount: number;
-    parser?: string; // 'unpdf' | 'mineru'
+    parser?: string; // e.g. 'mineru-local'
     processingTime?: number;
-    taskId?: string; // MinerU task ID
+    taskId?: string;
     /** Image ID to base64 URL mapping (used in generation pipeline) */
     imageMapping?: Record<string, string>; // e.g., { "img_1": "data:image/png;base64,..." }
     /** PdfImage array with page numbers (used in generation pipeline) */

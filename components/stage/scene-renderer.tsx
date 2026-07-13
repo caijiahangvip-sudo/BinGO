@@ -10,14 +10,15 @@ import { PBLRenderer } from '../scene-renderers/pbl-renderer';
 interface SceneRendererProps {
   readonly scene: Scene;
   readonly mode: StageMode;
+  readonly showTeachingEffects?: boolean;
 }
 
-export function SceneRenderer({ scene, mode }: SceneRendererProps) {
+export function SceneRenderer({ scene, mode, showTeachingEffects = false }: SceneRendererProps) {
   const renderer = useMemo(() => {
     switch (scene.type) {
       case 'slide':
         if (scene.content.type !== 'slide') return <div>Invalid slide content</div>;
-        return <SlideRenderer mode={mode} />;
+        return <SlideRenderer mode={mode} showTeachingEffects={showTeachingEffects} />;
       case 'quiz':
         if (scene.content.type !== 'quiz') return <div>Invalid quiz content</div>;
         return <QuizView key={scene.id} questions={scene.content.questions} sceneId={scene.id} />;
@@ -30,7 +31,7 @@ export function SceneRenderer({ scene, mode }: SceneRendererProps) {
       default:
         return <div>Unknown scene type</div>;
     }
-  }, [scene, mode]);
+  }, [scene, mode, showTeachingEffects]);
 
   return <div className="w-full h-full">{renderer}</div>;
 }

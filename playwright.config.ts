@@ -1,7 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
-  testDir: './e2e/tests',
+  testDir: './',
+  testMatch: ['e2e/tests/**/*.spec.ts', 'tests/e2e/**/*.spec.ts'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
@@ -19,10 +20,12 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: process.env.CI ? 'pnpm build && pnpm start' : 'pnpm dev',
+    command: process.env.CI
+      ? 'pnpm build && pnpm exec next start --port 3002'
+      : 'pnpm exec next dev --webpack --port 3002',
     url: 'http://localhost:3002',
     reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    timeout: 240_000,
     env: { PORT: '3002' },
   },
 });

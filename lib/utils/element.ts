@@ -1,6 +1,10 @@
 import tinycolor from 'tinycolor2';
 import { nanoid } from 'nanoid';
 import type { PPTElement, PPTLineElement, Slide } from '@/lib/types/slides';
+import {
+  getLineElementLocalBounds,
+  getLineElementPath as getLineElementPathFromGeometry,
+} from './line-geometry';
 
 interface RotatedElementData {
   left: number;
@@ -82,10 +86,11 @@ export const getElementRange = (element: PPTElement) => {
   let minX, maxX, minY, maxY;
 
   if (element.type === 'line') {
-    minX = element.left;
-    maxX = element.left + Math.max(element.start[0], element.end[0]);
-    minY = element.top;
-    maxY = element.top + Math.max(element.start[1], element.end[1]);
+    const bounds = getLineElementLocalBounds(element);
+    minX = element.left + bounds.minX;
+    maxX = element.left + bounds.maxX;
+    minY = element.top + bounds.minY;
+    maxY = element.top + bounds.maxY;
   } else if ('rotate' in element && element.rotate) {
     const { left, top, width, height, rotate } = element;
     const { xRange, yRange } = getRectRotatedRange({
@@ -220,29 +225,7 @@ export const getTableSubThemeColor = (themeColor: string) => {
  * @param element 线条元素
  */
 export const getLineElementPath = (element: PPTLineElement) => {
-  // Defensive: ensure start and end are arrays
-  const startArr = Array.isArray(element.start) ? element.start : [0, 0];
-  const endArr = Array.isArray(element.end) ? element.end : [100, 100];
-  const start = startArr.join(',');
-  const end = endArr.join(',');
-  if (element.broken) {
-    const mid = element.broken.join(',');
-    return `M${start} L${mid} L${end}`;
-  } else if (element.broken2) {
-    const { minX, maxX, minY, maxY } = getElementRange(element);
-    if (maxX - minX >= maxY - minY)
-      return `M${start} L${element.broken2[0]},${startArr[1]} L${element.broken2[0]},${endArr[1]} ${end}`;
-    return `M${start} L${startArr[0]},${element.broken2[1]} L${endArr[0]},${element.broken2[1]} ${end}`;
-  } else if (element.curve) {
-    const mid = element.curve.join(',');
-    return `M${start} Q${mid} ${end}`;
-  } else if (element.cubic) {
-    const [c1, c2] = element.cubic;
-    const p1 = c1.join(',');
-    const p2 = c2.join(',');
-    return `M${start} C${p1} ${p2} ${end}`;
-  }
-  return `M${start} L${end}`;
+  return getLineElementPathFromGeometry(element);
 };
 
 /**

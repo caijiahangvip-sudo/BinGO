@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useRef, useState, useEffect } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { PPTLineElement } from '@/lib/types/slides';
-import { getLineElementPath } from '@/lib/utils/element';
+import { getLineRenderGeometry } from '@/lib/utils/line-geometry';
 import { useElementShadow } from '../hooks/useElementShadow';
 import { LinePointMarker } from './LinePointMarker';
 
@@ -14,6 +14,10 @@ export interface BaseLineElementProps {
 /** Duration of the stroke-drawing animation in ms */
 const DRAW_ANIMATION_MS = 600;
 
+function safeSvgIdSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
 /**
  * Base line element for read-only/playback mode.
  * When animate=true, plays a stroke-drawing animation on mount.
@@ -22,16 +26,12 @@ export function BaseLineElement({ elementInfo, animate }: BaseLineElementProps) 
   const { shadowStyle } = useElementShadow(elementInfo.shadow);
   const pathRef = useRef<SVGPathElement>(null);
   const [drawComplete, setDrawComplete] = useState(!animate);
+  const reactId = useId();
 
-  const svgWidth = useMemo(() => {
-    const width = Math.abs(elementInfo.start[0] - elementInfo.end[0]);
-    return width < 24 ? 24 : width;
-  }, [elementInfo.start, elementInfo.end]);
-
-  const svgHeight = useMemo(() => {
-    const height = Math.abs(elementInfo.start[1] - elementInfo.end[1]);
-    return height < 24 ? 24 : height;
-  }, [elementInfo.start, elementInfo.end]);
+  const markerId = useMemo(
+    () => `${safeSvgIdSegment(elementInfo.id)}-${safeSvgIdSegment(reactId)}`,
+    [elementInfo.id, reactId],
+  );
 
   const lineDashArray = useMemo(() => {
     const size = elementInfo.width;
@@ -42,9 +42,7 @@ export function BaseLineElement({ elementInfo, animate }: BaseLineElementProps) 
     return '0 0';
   }, [elementInfo.width, elementInfo.style]);
 
-  const path = useMemo(() => {
-    return getLineElementPath(elementInfo);
-  }, [elementInfo]);
+  const geometry = useMemo(() => getLineRenderGeometry(elementInfo), [elementInfo]);
 
   // Stroke-drawing animation on mount (whiteboard only)
   useEffect(() => {
@@ -97,14 +95,19 @@ export function BaseLineElement({ elementInfo, animate }: BaseLineElementProps) 
       >
         <svg
           overflow="visible"
-          width={svgWidth}
-          height={svgHeight}
-          className="transform-origin-[0_0] overflow-visible"
+          width={geometry.width}
+          height={geometry.height}
+          viewBox={geometry.viewBox}
+          className="absolute transform-origin-[0_0] overflow-visible"
+          style={{
+            left: `${geometry.left}px`,
+            top: `${geometry.top}px`,
+          }}
         >
           <defs>
             {elementInfo.points[0] && (
               <LinePointMarker
-                id={elementInfo.id}
+                id={markerId}
                 position="start"
                 type={elementInfo.points[0]}
                 color={elementInfo.color}
@@ -113,7 +116,7 @@ export function BaseLineElement({ elementInfo, animate }: BaseLineElementProps) 
             )}
             {elementInfo.points[1] && (
               <LinePointMarker
-                id={elementInfo.id}
+                id={markerId}
                 position="end"
                 type={elementInfo.points[1]}
                 color={elementInfo.color}
@@ -123,19 +126,19 @@ export function BaseLineElement({ elementInfo, animate }: BaseLineElementProps) 
           </defs>
           <path
             ref={pathRef}
-            d={path}
+            d={geometry.path}
             stroke={elementInfo.color}
             strokeWidth={elementInfo.width}
             strokeDasharray={lineDashArray}
             fill="none"
             markerStart={
               drawComplete && elementInfo.points[0]
-                ? `url(#${elementInfo.id}-${elementInfo.points[0]}-start)`
+                ? `url(#${markerId}-${elementInfo.points[0]}-start)`
                 : ''
             }
             markerEnd={
               drawComplete && elementInfo.points[1]
-                ? `url(#${elementInfo.id}-${elementInfo.points[1]}-end)`
+                ? `url(#${markerId}-${elementInfo.points[1]}-end)`
                 : ''
             }
           />

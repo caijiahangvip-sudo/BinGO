@@ -6,6 +6,7 @@ import type {
   PdfImage,
   ImageMapping,
 } from '@/lib/types/generation';
+import type { BookLessonReviewContext } from '@/lib/utils/book-lesson-generation-session';
 
 // Session state stored in sessionStorage
 export interface GenerationSessionState {
@@ -25,6 +26,17 @@ export interface GenerationSessionState {
   // Web search context
   researchContext?: string;
   researchSources?: Array<{ title: string; url: string }>;
+  // Force the normal classroom role-generation step for flows that must feel like
+  // a fresh homepage classroom request, regardless of the user's current agent mode.
+  forceAgentGeneration?: boolean;
+  // Optional context when a long-term PDF lesson is rendered as a normal classroom.
+  bookLessonContext?: {
+    planId: string;
+    lessonId: string;
+    lessonOrder: number;
+    knowledgePointIds?: string[];
+    reviewContext?: BookLessonReviewContext;
+  };
 }
 
 export type GenerationStep = {
@@ -84,7 +96,9 @@ export const getActiveSteps = (session: GenerationSessionState | null) => {
   return ALL_STEPS.filter((step) => {
     if (step.id === 'pdf-analysis') return !!session?.pdfStorageKey;
     if (step.id === 'web-search') return !!session?.requirements?.webSearch;
-    if (step.id === 'agent-generation') return useSettingsStore.getState().agentMode === 'auto';
+    if (step.id === 'agent-generation') {
+      return !!session?.forceAgentGeneration || useSettingsStore.getState().agentMode === 'auto';
+    }
     return true;
   });
 };

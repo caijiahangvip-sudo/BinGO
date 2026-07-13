@@ -3,8 +3,7 @@ import {
   getServerTTSProviders,
   getServerASRProviders,
   getServerPDFProviders,
-  getServerImageProviders,
-  getServerVideoProviders,
+  getServerVectorProviders,
   getServerWebSearchProviders,
 } from '@/lib/server/provider-config';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
@@ -19,8 +18,7 @@ export async function GET() {
       tts: getServerTTSProviders(),
       asr: getServerASRProviders(),
       pdf: getServerPDFProviders(),
-      image: getServerImageProviders(),
-      video: getServerVideoProviders(),
+      vector: getServerVectorProviders(),
       webSearch: getServerWebSearchProviders(),
     });
   } catch (error) {

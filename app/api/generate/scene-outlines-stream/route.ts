@@ -18,7 +18,6 @@ import {
   formatImageDescription,
   formatImagePlaceholder,
   buildVisionUserContent,
-  uniquifyMediaElementIds,
   formatTeacherPersonaForPrompt,
 } from '@/lib/generation/generation-pipeline';
 import type { AgentInfo } from '@/lib/generation/generation-pipeline';
@@ -33,6 +32,8 @@ import type {
 import { apiError } from '@/lib/server/api-response';
 import { createLogger } from '@/lib/logger';
 import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
+import { buildChineseXinhuaPromptContext } from '@/lib/server/chinese-xinhua';
+import { normalizeReviewRecallOutlines } from '@/lib/generation/review-recall-outline-normalizer';
 const log = createLogger('Outlines Stream');
 
 export const maxDuration = 300;
@@ -85,7 +86,7 @@ function extractNewOutlines(buffer: string, alreadyParsed: number): SceneOutline
             const obj = JSON.parse(stripped.substring(objectStart, i + 1));
             results.push(obj);
           } catch {
-            // Incomplete or invalid JSON — skip
+            // Incomplete or invalid JSON - skip
           }
         }
         objectStart = -1;
@@ -110,15 +111,41 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Requirements are required');
     }
 
-    const { requirements, pdfText, pdfImages, imageMapping, researchContext, agents } = body as {
+    const {
+      requirements,
+      pdfText,
+      pdfImages,
+      imageMapping,
+      researchContext,
+      agents,
+      forceClassroomScenes,
+    } = body as {
       requirements: UserRequirements;
       pdfText?: string;
       pdfImages?: PdfImage[];
       imageMapping?: ImageMapping;
       researchContext?: string;
       agents?: AgentInfo[];
+      forceClassroomScenes?: boolean;
     };
-    requirementSnippet = requirements?.requirement?.substring(0, 60);
+    const classroomScenePolicy =
+      requirements.language === 'zh-CN'
+        ? [
+            '硬性生成模式：必须生成普通互动课堂 scene 大纲。',
+            '不要生成文档、讲义、学习报告、教案、练习册、长文总结或 lesson document。',
+            '大纲必须包含多个 scene，至少包含 slide 和 quiz；如果主题适合，加入 interactive 或 PBL。',
+            'slide scene 是视觉幻灯片页面，不是段落文档。',
+          ].join('\n')
+        : [
+            'Hard generation mode: generate normal interactive classroom scene outlines.',
+            'Do not generate a document, handout, study report, lesson-plan document, worksheet, long-form summary, or lesson document.',
+            'The outline must contain multiple scenes and at least include slide and quiz; add interactive or PBL when useful.',
+            'Slide scenes are visual slide pages, not paragraph documents.',
+          ].join('\n');
+    const outlineRequirement = forceClassroomScenes
+      ? `${requirements.requirement}\n\n${classroomScenePolicy}`
+      : requirements.requirement;
+    requirementSnippet = outlineRequirement?.substring(0, 60);
 
     // Detect vision capability
     const hasVision = !!modelInfo?.capabilities?.vision;
@@ -158,26 +185,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Build media generation policy based on enabled flags
-    const imageGenerationEnabled = req.headers.get('x-image-generation-enabled') === 'true';
-    const videoGenerationEnabled = req.headers.get('x-video-generation-enabled') === 'true';
-    let mediaGenerationPolicy = '';
-    if (!imageGenerationEnabled && !videoGenerationEnabled) {
-      mediaGenerationPolicy =
-        '**IMPORTANT: Do NOT include any mediaGenerations in the outlines. Both image and video generation are disabled.**';
-    } else if (!imageGenerationEnabled) {
-      mediaGenerationPolicy =
-        '**IMPORTANT: Do NOT include any image mediaGenerations (type: "image") in the outlines. Image generation is disabled. Video generation is allowed.**';
-    } else if (!videoGenerationEnabled) {
-      mediaGenerationPolicy =
-        '**IMPORTANT: Do NOT include any video mediaGenerations (type: "video") in the outlines. Video generation is disabled. Image generation is allowed.**';
-    }
+    const mediaGenerationPolicy =
+      '**IMPORTANT: Do NOT include any mediaGenerations in the outlines. AI image and video generation are not available in this classroom pipeline.**';
 
     // Build teacher context from agents (if available)
     const teacherContext = formatTeacherPersonaForPrompt(agents);
 
     const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
-      requirement: requirements.requirement,
+      requirement: outlineRequirement,
       language: requirements.language,
       pdfContent: pdfText
         ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS)
@@ -193,6 +208,16 @@ export async function POST(req: NextRequest) {
     if (!prompts) {
       return apiError('INTERNAL_ERROR', 500, 'Prompt template not found');
     }
+    const dictionaryContext = await buildChineseXinhuaPromptContext({
+      text: [outlineRequirement, pdfText?.slice(0, 16000), researchContext]
+        .filter(Boolean)
+        .join('\n'),
+      language: requirements.language,
+      limit: 10,
+    });
+    const systemPrompt = dictionaryContext
+      ? `${prompts.system}\n\n# Chinese Dictionary References\n${dictionaryContext}`
+      : prompts.system;
 
     log.info(
       `Generating outlines: "${requirements.requirement.substring(0, 50)}" [model=${modelString}]`,
@@ -230,7 +255,7 @@ export async function POST(req: NextRequest) {
           const streamParams = visionImages?.length
             ? {
                 model: languageModel,
-                system: prompts.system,
+                system: systemPrompt,
                 messages: [
                   {
                     role: 'user' as const,
@@ -241,7 +266,7 @@ export async function POST(req: NextRequest) {
               }
             : {
                 model: languageModel,
-                system: prompts.system,
+                system: systemPrompt,
                 prompt: prompts.user,
                 maxOutputTokens: modelInfo?.outputWindow,
               };
@@ -267,6 +292,7 @@ export async function POST(req: NextRequest) {
                     ...outline,
                     id: outline.id || nanoid(),
                     order: parsedOutlines.length + 1,
+                    language: requirements.language,
                   };
                   parsedOutlines.push(enriched);
 
@@ -282,7 +308,7 @@ export async function POST(req: NextRequest) {
               // Validate: got outlines?
               if (parsedOutlines.length > 0) break;
 
-              // Empty result — retry if we have attempts left
+              // Empty result - retry if we have attempts left
               lastError = fullText.trim()
                 ? 'LLM response could not be parsed into outlines'
                 : 'LLM returned empty response';
@@ -319,12 +345,14 @@ export async function POST(req: NextRequest) {
           }
 
           if (parsedOutlines.length > 0) {
-            // Replace sequential gen_img_N/gen_vid_N with globally unique IDs
-            const uniquifiedOutlines = uniquifyMediaElementIds(parsedOutlines);
+            const normalizedOutlines = normalizeReviewRecallOutlines(
+              parsedOutlines,
+              requirements.language,
+            );
             // Send done event with all outlines
             const doneEvent = JSON.stringify({
               type: 'done',
-              outlines: uniquifiedOutlines,
+              outlines: normalizedOutlines,
             });
             controller.enqueue(encoder.encode(`data: ${doneEvent}\n\n`));
           } else {

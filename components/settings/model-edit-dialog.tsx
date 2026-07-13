@@ -55,6 +55,15 @@ export function ModelEditDialog({
     }
   }, [open]);
 
+  useEffect(() => {
+    if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Clear stale test result when provider credentials change
+      setTestStatus('idle');
+
+      setTestMessage('');
+    }
+  }, [apiKey, baseUrl, providerId, providerType, requiresApiKey, open]);
+
   const handleClose = () => {
     onOpenChange(false);
     setEditingModel(null);
@@ -85,7 +94,7 @@ export function ModelEditDialog({
 
       if (data.success) {
         setTestStatus('success');
-        setTestMessage(t('settings.connectionSuccess'));
+        setTestMessage(data.message || t('settings.connectionSuccess'));
       } else {
         setTestStatus('error');
         setTestMessage(data.error || t('settings.connectionFailed'));
@@ -155,12 +164,14 @@ export function ModelEditDialog({
             <Input
               placeholder={t('settings.modelNamePlaceholder')}
               value={editingModel.model.name}
-              onChange={(e) =>
+              onChange={(e) => {
                 setEditingModel({
                   ...editingModel,
                   model: { ...editingModel.model, name: e.target.value },
-                })
-              }
+                });
+                setTestStatus('idle');
+                setTestMessage('');
+              }}
               onBlur={() => onAutoSave?.()}
             />
           </div>

@@ -6,8 +6,15 @@
 
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
-import type { WhiteboardActionRecord, AgentTurnSummary } from './director-prompt';
+import {
+  VISION_CONFIDENCE_FALLBACK_PROMPT,
+  getWhiteboardActorName,
+  isWhiteboardLedgerSummary,
+} from './director-prompt';
+import type { WhiteboardLedgerRecord, AgentTurnSummary } from './director-prompt';
 import { getActionDescriptions, getEffectiveActions } from './tool-schemas';
+
+const USER_REQUESTED_HINT_TOKEN = '[USER_REQUESTED_HINT]';
 
 // ==================== Role Guidelines ====================
 
@@ -46,6 +53,8 @@ You are NOT a teacher — your responses should be much shorter than the teacher
 interface DiscussionContext {
   topic: string;
   prompt?: string;
+  autoEndPolicy?: 'quiz_pass';
+  studentQuestion?: string;
 }
 
 // ==================== Peer Context ====================
@@ -94,7 +103,7 @@ export function buildStructuredPrompt(
   agentConfig: AgentConfig,
   storeState: StatelessChatRequest['storeState'],
   discussionContext?: DiscussionContext,
-  whiteboardLedger?: WhiteboardActionRecord[],
+  whiteboardLedger?: WhiteboardLedgerRecord[],
   userProfile?: { nickname?: string; bio?: string },
   agentResponses?: AgentTurnSummary[],
 ): string {
@@ -131,7 +140,7 @@ Personalize your teaching based on their background when relevant. Address them 
 
   // Build format example based on available actions
   const formatExample = hasSlideActions
-    ? `[{"type":"action","name":"spotlight","params":{"elementId":"img_1"}},{"type":"text","content":"Your natural speech to students"}]`
+    ? `[{"type":"action","name":"spotlight","params":{"elementId":"img_1","dimOpacity":0.24}},{"type":"text","content":"Your natural speech to students"}]`
     : `[{"type":"action","name":"wb_open","params":{}},{"type":"text","content":"Your natural speech to students"}]`;
 
   // Ordering principles
@@ -142,16 +151,16 @@ Personalize your teaching based on their background when relevant. Address them 
 
   // Good examples — include spotlight/laser examples only for slide scenes
   const spotlightExamples = hasSlideActions
-    ? `[{"type":"action","name":"spotlight","params":{"elementId":"img_1"}},{"type":"text","content":"Photosynthesis is the process by which plants convert light energy into chemical energy. Take a look at this diagram."},{"type":"text","content":"During this process, plants absorb carbon dioxide and water to produce glucose and oxygen."}]
+    ? `[{"type":"action","name":"spotlight","params":{"elementId":"img_1","dimOpacity":0.24}},{"type":"text","content":"Photosynthesis is the process by which plants convert light energy into chemical energy. Take a look at this diagram."},{"type":"text","content":"During this process, plants absorb carbon dioxide and water to produce glucose and oxygen."}]
 
-[{"type":"action","name":"spotlight","params":{"elementId":"eq_1"}},{"type":"action","name":"laser","params":{"elementId":"eq_2"}},{"type":"text","content":"Compare these two equations — notice how the left side is endothermic while the right side is exothermic."}]
+[{"type":"action","name":"spotlight","params":{"elementId":"eq_1","dimOpacity":0.24}},{"type":"action","name":"laser","params":{"elementId":"eq_2"}},{"type":"text","content":"Compare these two equations — notice how the left side is endothermic while the right side is exothermic."}]
 
 `
     : '';
 
   // Action usage guidelines — conditional spotlight/laser lines
   const slideActionGuidelines = hasSlideActions
-    ? `- spotlight: Use to focus attention on ONE key element. Don't overuse — max 1-2 per response.
+    ? `- spotlight: Use to focus attention on ONE key element. Keep the page readable: use dimOpacity 0.2-0.32 and never above 0.42. Don't overuse — max 1-2 per response.
 - laser: Use to point at elements. Good for directing attention during explanations.
 `
     : '';
@@ -162,6 +171,17 @@ Personalize your teaching based on their background when relevant. Address them 
     : '';
 
   const roleGuideline = ROLE_GUIDELINES[agentConfig.role] || ROLE_GUIDELINES.student;
+  const quizPassSection =
+    discussionContext?.autoEndPolicy === 'quiz_pass'
+      ? `
+# Automatic Understanding Check
+This discussion was triggered by the student's spoken question: "${discussionContext.studentQuestion || discussionContext.topic}".
+- First, answer the student's question directly and briefly.
+- End your speech with exactly one short understanding-check question the student can answer in one sentence.
+- Do not say the discussion is over. The director will end it only after the student's answer demonstrates understanding.
+- If the student just answered a previous check incorrectly or vaguely, correct only the missing point and ask one new brief check question.
+`
+      : '';
 
   // Build language constraint from stage language
   const courseLanguage = storeState.stage?.language;
@@ -177,7 +197,9 @@ ${agentConfig.persona}
 
 ## Your Classroom Role
 ${roleGuideline}
-${studentProfileSection}${peerContext}${languageConstraint}
+${studentProfileSection}${peerContext}${languageConstraint}${quizPassSection}
+${VISION_CONFIDENCE_FALLBACK_PROMPT}
+
 # Output Format
 You MUST output a JSON array for ALL responses. Each element is an object with a \`type\` field:
 
@@ -476,7 +498,7 @@ function summarizeElements(elements: any[]): string {
  * Tracked element from replaying the whiteboard ledger
  */
 interface VirtualWhiteboardElement {
-  agentName: string;
+  actorName: string;
   summary: string;
   elementId?: string; // Present for elements from initial whiteboard state
 }
@@ -492,14 +514,20 @@ interface VirtualWhiteboardElement {
  */
 function buildVirtualWhiteboardContext(
   storeState: StatelessChatRequest['storeState'],
-  ledger?: WhiteboardActionRecord[],
+  ledger?: WhiteboardLedgerRecord[],
 ): string {
   if (!ledger || ledger.length === 0) return '';
 
   // Replay ledger to build current element list
   const elements: VirtualWhiteboardElement[] = [];
+  const compressedSummaries: string[] = [];
 
   for (const record of ledger) {
+    if (isWhiteboardLedgerSummary(record)) {
+      compressedSummaries.push(record.content);
+      continue;
+    }
+
     switch (record.actionName) {
       case 'wb_clear':
         elements.length = 0;
@@ -519,7 +547,7 @@ function buildVirtualWhiteboardContext(
         const w = record.params.width ?? 400;
         const h = record.params.height ?? 100;
         elements.push({
-          agentName: record.agentName,
+          actorName: getWhiteboardActorName(record),
           summary: `text: "${content}${content.length >= 40 ? '...' : ''}" at (${x},${y}), size ~${w}x${h}`,
         });
         break;
@@ -531,7 +559,7 @@ function buildVirtualWhiteboardContext(
         const w = record.params.width ?? 100;
         const h = record.params.height ?? 100;
         elements.push({
-          agentName: record.agentName,
+          actorName: getWhiteboardActorName(record),
           summary: `shape(${shapeType}) at (${x},${y}), size ${w}x${h}`,
         });
         break;
@@ -546,7 +574,7 @@ function buildVirtualWhiteboardContext(
         const w = record.params.width ?? 350;
         const h = record.params.height ?? 250;
         elements.push({
-          agentName: record.agentName,
+          actorName: getWhiteboardActorName(record),
           summary: `chart(${chartType})${labels ? `: labels=[${(labels as string[]).slice(0, 4).join(',')}]` : ''} at (${x},${y}), size ${w}x${h}`,
         });
         break;
@@ -559,7 +587,7 @@ function buildVirtualWhiteboardContext(
         // Estimate latex height: ~80px default for single-line, more for complex formulas
         const h = record.params.height ?? 80;
         elements.push({
-          agentName: record.agentName,
+          actorName: getWhiteboardActorName(record),
           summary: `latex: "${latex}${latex.length >= 40 ? '...' : ''}" at (${x},${y}), size ~${w}x${h}`,
         });
         break;
@@ -573,7 +601,7 @@ function buildVirtualWhiteboardContext(
         const w = record.params.width ?? 400;
         const h = record.params.height ?? rows * 40 + 20;
         elements.push({
-          agentName: record.agentName,
+          actorName: getWhiteboardActorName(record),
           summary: `table(${rows}×${cols}) at (${x},${y}), size ${w}x${h}`,
         });
         break;
@@ -586,7 +614,7 @@ function buildVirtualWhiteboardContext(
         const pts = record.params.points as string[] | undefined;
         const hasArrow = pts?.includes('arrow') ? ' (arrow)' : '';
         elements.push({
-          agentName: record.agentName,
+          actorName: getWhiteboardActorName(record),
           summary: `line${hasArrow}: (${sx},${sy}) → (${ex},${ey})`,
         });
         break;
@@ -595,19 +623,24 @@ function buildVirtualWhiteboardContext(
     }
   }
 
-  if (elements.length === 0) return '';
+  if (elements.length === 0 && compressedSummaries.length === 0) return '';
 
   const elementLines = elements
-    .map((el, i) => `  ${i + 1}. [by ${el.agentName}] ${el.summary}`)
+    .map((el, i) => `  ${i + 1}. [by ${el.actorName}] ${el.summary}`)
     .join('\n');
+  const summarySection =
+    compressedSummaries.length > 0
+      ? `Earlier compressed whiteboard history:\n${compressedSummaries.map((item) => `  - ${item}`).join('\n')}\n`
+      : '';
 
   return `
-## Whiteboard Changes This Round (IMPORTANT)
-Other agents have modified the whiteboard during this discussion round.
+## Whiteboard Ledger This Round (IMPORTANT)
+Agents and the student may have modified the whiteboard during this discussion round.
+${summarySection}
 Current whiteboard elements (${elements.length}):
-${elementLines}
+${elementLines || '  (no current elements reconstructed from recent entries)'}
 
-DO NOT redraw content that already exists. Check positions above before adding new elements.
+DO NOT redraw content that already exists. Check positions above before adding new elements. If an entry is by Student, treat it as the student's reasoning trace.
 `;
 }
 
@@ -696,9 +729,33 @@ function buildStateContext(storeState: StatelessChatRequest['storeState']): stri
 /**
  * OpenAI message format (used by director)
  */
-interface OpenAIMessage {
+export type OpenAITextContentPart = { type: 'text'; text: string };
+export type OpenAIImageUrlContentPart = {
+  type: 'image_url';
+  image_url: { url: string };
+};
+export type OpenAIMessageContent =
+  | string
+  | Array<OpenAITextContentPart | OpenAIImageUrlContentPart>;
+
+export interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  content: OpenAIMessageContent;
+}
+
+function getOpenAIMessageText(content: OpenAIMessageContent): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  return content
+    .map((part) => {
+      if (part.type === 'text') return part.text;
+      if (part.type === 'image_url') return '[whiteboard image attached]';
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**
@@ -724,10 +781,11 @@ export function summarizeConversation(
   const lines = recent.map((msg) => {
     const roleLabel =
       msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'Assistant' : 'System';
+    const textContent = getOpenAIMessageText(msg.content);
     const content =
-      msg.content.length > maxContentLength
-        ? msg.content.slice(0, maxContentLength) + '...'
-        : msg.content;
+      textContent.length > maxContentLength
+        ? textContent.slice(0, maxContentLength) + '...'
+        : textContent;
     return `[${roleLabel}] ${content}`;
   });
 
@@ -743,7 +801,7 @@ export function summarizeConversation(
 export function convertMessagesToOpenAI(
   messages: StatelessChatRequest['messages'],
   currentAgentId?: string,
-): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+): OpenAIMessage[] {
   return messages
     .filter((msg) => msg.role === 'user' || msg.role === 'assistant')
     .map((msg) => {
@@ -798,6 +856,7 @@ export function convertMessagesToOpenAI(
 
       // User messages: keep plain text concatenation
       const contentParts: string[] = [];
+      const imageUrls: string[] = [];
 
       if (msg.parts) {
         for (const part of msg.parts) {
@@ -805,6 +864,18 @@ export function convertMessagesToOpenAI(
 
           if (p.type === 'text' && p.text) {
             contentParts.push(p.text as string);
+          } else if (
+            p.type === 'image_url' &&
+            typeof (p.image_url as Record<string, unknown> | undefined)?.url === 'string'
+          ) {
+            imageUrls.push((p.image_url as { url: string }).url);
+          } else if (
+            p.type === 'file' &&
+            typeof p.url === 'string' &&
+            typeof p.mediaType === 'string' &&
+            p.mediaType.startsWith('image/')
+          ) {
+            imageUrls.push(p.url);
           } else if ((p.type as string)?.startsWith('action-') && p.state === 'result') {
             const actionName = (p.actionName ||
               (p.type as string).replace('action-', '')) as string;
@@ -822,8 +893,12 @@ export function convertMessagesToOpenAI(
 
       // Extract speaker name from metadata (e.g. other agents' messages in discussion)
       const senderName = msg.metadata?.senderName;
+      const isHidden = msg.metadata?.hidden === true;
       let content = contentParts.join('\n');
-      if (senderName) {
+      if (isHidden && content.includes(USER_REQUESTED_HINT_TOKEN)) {
+        content =
+          '[SYSTEM_CONTROL]: The student clicked "Need Hint" during teach-back. Treat this as the student giving up on the current attempt. Provide a short scaffolded hint, lower the difficulty, and do not reveal the full answer immediately.';
+      } else if (senderName) {
         content = `[${senderName}]: ${content}`;
       }
 
@@ -832,17 +907,35 @@ export function convertMessagesToOpenAI(
         (msg as unknown as Record<string, unknown>).metadata &&
         ((msg as unknown as Record<string, unknown>).metadata as Record<string, unknown>)
           ?.interrupted;
+      if (isInterrupted) {
+        content = `${content}\n[This response was interrupted — do NOT continue it. Start a new JSON array response.]`;
+      }
+
+      if (imageUrls.length > 0) {
+        return {
+          role: 'user' as const,
+          content: [
+            {
+              type: 'text' as const,
+              text: content || 'Student submitted a whiteboard snapshot.',
+            },
+            ...imageUrls.map((url) => ({
+              type: 'image_url' as const,
+              image_url: { url },
+            })),
+          ],
+        };
+      }
+
       return {
         role: 'user' as const,
-        content: isInterrupted
-          ? `${content}\n[This response was interrupted — do NOT continue it. Start a new JSON array response.]`
-          : content,
+        content,
       };
     })
     .filter((msg) => {
       // Drop empty messages and messages with only dots/ellipsis/whitespace
       // (produced by failed agent streams)
-      const stripped = msg.content.replace(/[.\s…]+/g, '');
+      const stripped = getOpenAIMessageText(msg.content).replace(/[.\s…]+/g, '');
       return stripped.length > 0;
     });
 }

@@ -14,9 +14,11 @@ Actions are expressed as objects in a JSON array. Each object has a `type` field
 {
   "type": "action",
   "name": "spotlight",
-  "params": { "elementId": "element_id" }
+  "params": { "elementId": "element_id", "dimOpacity": 0.24 }
 }
 ```
+
+Keep spotlight readable: use `dimOpacity` between `0.2` and `0.32`, never above `0.42`.
 
 ### laser - Laser Pointer
 

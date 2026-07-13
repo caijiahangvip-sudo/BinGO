@@ -17,6 +17,7 @@ import { useSettingsStore } from '@/lib/store/settings';
 import {
   TTS_PROVIDERS,
   getTTSVoices,
+  getDefaultTTSVoice,
   ASR_PROVIDERS,
   getASRSupportedLanguages,
 } from '@/lib/audio/constants';
@@ -32,26 +33,28 @@ const log = createLogger('AudioSettings');
  * Get provider display name with i18n
  */
 function getTTSProviderName(providerId: TTSProviderId, t: (key: string) => string): string {
-  const names: Record<TTSProviderId, string> = {
+  const names: Record<string, string> = {
     'openai-tts': t('settings.providerOpenAITTS'),
     'azure-tts': t('settings.providerAzureTTS'),
     'glm-tts': t('settings.providerGLMTTS'),
     'qwen-tts': t('settings.providerQwenTTS'),
+    'cosyvoice-tts': t('settings.providerCosyVoiceTTS'),
     'doubao-tts': t('settings.providerDoubaoTTS'),
     'elevenlabs-tts': t('settings.providerElevenLabsTTS'),
     'minimax-tts': t('settings.providerMiniMaxTTS'),
     'browser-native-tts': t('settings.providerBrowserNativeTTS'),
   };
-  return names[providerId];
+  return names[providerId] || providerId;
 }
 
 function getASRProviderName(providerId: ASRProviderId, t: (key: string) => string): string {
-  const names: Record<ASRProviderId, string> = {
+  const names: Record<string, string> = {
     'openai-whisper': t('settings.providerOpenAIWhisper'),
     'browser-native': t('settings.providerBrowserNative'),
     'qwen-asr': t('settings.providerQwenASR'),
+    'sensevoice-asr': t('settings.providerSenseVoiceASR'),
   };
-  return names[providerId];
+  return names[providerId] || providerId;
 }
 
 function getLanguageName(code: string, t: (key: string) => string): string {
@@ -89,7 +92,13 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
   const setTTSEnabled = useSettingsStore((state) => state.setTTSEnabled);
   const setASREnabled = useSettingsStore((state) => state.setASREnabled);
 
-  const ttsProvider = TTS_PROVIDERS[ttsProviderId] ?? TTS_PROVIDERS['openai-tts'];
+  const ttsProviderConfig = ttsProvidersConfig[ttsProviderId];
+  const ttsCompatibleProviderId = ttsProviderConfig?.compatibleProviderId || ttsProviderId;
+  const ttsModelId =
+    ttsProviderConfig?.modelId || TTS_PROVIDERS[ttsCompatibleProviderId]?.defaultModelId;
+  const asrProviderConfig = asrProvidersConfig[asrProviderId];
+  const asrCompatibleProviderId = asrProviderConfig?.compatibleProviderId || asrProviderId;
+  const ttsProvider = TTS_PROVIDERS[ttsCompatibleProviderId] ?? TTS_PROVIDERS['openai-tts'];
 
   // Azure voices - load from static JSON
   const azureVoices = useMemo(() => azureVoicesData.voices, []);
@@ -146,13 +155,13 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
   const ttsTestRequestIdRef = useRef(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
-  const asrProvider = ASR_PROVIDERS[asrProviderId] ?? ASR_PROVIDERS['openai-whisper'];
+  const asrProvider = ASR_PROVIDERS[asrCompatibleProviderId] ?? ASR_PROVIDERS['openai-whisper'];
 
   // Reset locale filter when provider changes (derived state pattern)
   const [prevTTSProviderId, setPrevTTSProviderId] = useState(ttsProviderId);
   if (ttsProviderId !== prevTTSProviderId) {
     setPrevTTSProviderId(ttsProviderId);
-    if (ttsProviderId !== 'azure-tts') {
+    if (ttsCompatibleProviderId !== 'azure-tts') {
       setSelectedLocale('all');
     }
   }
@@ -173,7 +182,7 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
 
   // Update voice selection when locale filter changes
   useEffect(() => {
-    if (ttsProviderId === 'azure-tts' && selectedLocale !== 'all') {
+    if (ttsCompatibleProviderId === 'azure-tts' && selectedLocale !== 'all') {
       // Filter Azure voices by selected locale
       const filteredVoices = azureVoices.filter((voice) => voice.Locale === selectedLocale);
 
@@ -187,7 +196,7 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
     }
     // Intentionally exclude ttsVoice from dependencies to avoid infinite loop
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedLocale, ttsProviderId, azureVoices, setTTSVoice]);
+  }, [selectedLocale, ttsCompatibleProviderId, azureVoices, setTTSVoice]);
 
   useEffect(() => {
     stopTTSPreview();
@@ -197,7 +206,7 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
   useEffect(() => {
     let availableVoices: Array<{ id: string; name: string }> = [];
 
-    if (ttsProviderId === 'azure-tts') {
+    if (ttsCompatibleProviderId === 'azure-tts') {
       // Use Azure voices from JSON
       availableVoices = azureVoices.map((voice) => ({
         id: voice.ShortName,
@@ -205,26 +214,49 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
       }));
     } else {
       // Use static voices from constants
-      availableVoices = getTTSVoices(ttsProviderId);
+      availableVoices = getTTSVoices(
+        ttsCompatibleProviderId,
+        ttsModelId,
+        ttsProviderConfig?.providerOptions,
+      );
     }
 
     if (availableVoices.length > 0) {
       // Initialize default voice if not set
       if (!ttsVoice) {
-        setTTSVoice(availableVoices[0].id);
+        setTTSVoice(
+          getDefaultTTSVoice(
+            ttsCompatibleProviderId,
+            ttsModelId,
+            ttsProviderConfig?.providerOptions,
+          ),
+        );
       } else {
         // Check if current voice is available in new provider
         const currentVoiceExists = availableVoices.some((v) => v.id === ttsVoice);
         if (!currentVoiceExists) {
-          setTTSVoice(availableVoices[0].id);
+          setTTSVoice(
+            getDefaultTTSVoice(
+              ttsCompatibleProviderId,
+              ttsModelId,
+              ttsProviderConfig?.providerOptions,
+            ),
+          );
         }
       }
     }
-  }, [ttsProviderId, ttsVoice, azureVoices, setTTSVoice]);
+  }, [
+    ttsCompatibleProviderId,
+    ttsModelId,
+    ttsProviderConfig?.providerOptions,
+    ttsVoice,
+    azureVoices,
+    setTTSVoice,
+  ]);
 
   // Initialize and reset ASR language when provider changes
   useEffect(() => {
-    const availableLanguages = getASRSupportedLanguages(asrProviderId);
+    const availableLanguages = getASRSupportedLanguages(asrCompatibleProviderId);
     if (availableLanguages.length > 0) {
       // Initialize default language if not set
       if (!asrLanguage) {
@@ -237,7 +269,7 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
         }
       }
     }
-  }, [asrProviderId, asrLanguage, setASRLanguage]);
+  }, [asrCompatibleProviderId, asrLanguage, setASRLanguage]);
 
   useEffect(() => {
     return () => {
@@ -266,7 +298,7 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
       setASRTestStatus('testing');
       setASRTestMessage('');
 
-      if (asrProviderId === 'browser-native') {
+      if (asrCompatibleProviderId === 'browser-native') {
         const SpeechRecognitionCtor =
           (window as unknown as Record<string, unknown>).SpeechRecognition ||
           (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
@@ -319,7 +351,13 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
             const formData = new FormData();
             formData.append('audio', audioBlob, 'recording.webm');
             formData.append('providerId', asrProviderId);
+            formData.append('compatibleProviderId', asrCompatibleProviderId);
             formData.append('language', asrLanguage);
+            const modelId =
+              asrProviderConfig?.modelId || ASR_PROVIDERS[asrCompatibleProviderId]?.defaultModelId;
+            if (modelId) {
+              formData.append('modelId', modelId);
+            }
 
             // Only append non-empty values
             const apiKeyValue = asrProvidersConfig[asrProviderId]?.apiKey;
@@ -625,37 +663,11 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
                   />
                 </div>
               </div>
-              {(() => {
-                const effectiveBaseUrl =
-                  asrProvidersConfig[asrProviderId]?.baseUrl || asrProvider.defaultBaseUrl || '';
-                if (!effectiveBaseUrl) return null;
-
-                // Get endpoint path based on provider
-                let endpointPath = '';
-                switch (asrProviderId) {
-                  case 'openai-whisper':
-                    endpointPath = '/audio/transcriptions';
-                    break;
-                  case 'qwen-asr':
-                    endpointPath = '/services/aigc/multimodal-generation/generation';
-                    break;
-                  default:
-                    endpointPath = '';
-                }
-
-                if (!endpointPath) return null;
-                const fullUrl = effectiveBaseUrl + endpointPath;
-                return (
-                  <p className="text-xs text-muted-foreground break-all">
-                    {t('settings.requestUrl')}: {fullUrl}
-                  </p>
-                );
-              })()}
             </>
           )}
 
           {(() => {
-            const supportedLanguages = getASRSupportedLanguages(asrProviderId);
+            const supportedLanguages = getASRSupportedLanguages(asrCompatibleProviderId);
             const hasLanguageSelection = supportedLanguages.length > 0;
 
             return (

@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import type { Slide } from '@/lib/types/slides';
 import { useSlideBackgroundStyle } from '@/lib/hooks/use-slide-background-style';
+import { repairSlideElementLayout } from '@/lib/utils/slide-element-layout';
+import { repairGeometryDiagramLayering } from '@/lib/utils/slide-element-order';
 import { ThumbnailElement } from './ThumbnailElement';
 
 interface ThumbnailSlideProps {
@@ -31,6 +33,16 @@ export function ThumbnailSlide({
 }: ThumbnailSlideProps) {
   // Calculate scale ratio
   const scale = useMemo(() => size / viewportSize, [size, viewportSize]);
+  const orderedElements = useMemo(
+    () =>
+      repairGeometryDiagramLayering(
+        repairSlideElementLayout(slide.elements, {
+          canvasWidth: viewportSize,
+          canvasHeight: viewportSize * viewportRatio,
+        }),
+      ),
+    [slide.elements, viewportRatio, viewportSize],
+  );
 
   // Get background style
   const { backgroundStyle } = useSlideBackgroundStyle(slide.background);
@@ -71,7 +83,7 @@ export function ThumbnailSlide({
         <div className="background w-full h-full bg-center absolute" style={backgroundStyle} />
 
         {/* Render all elements */}
-        {slide.elements.map((element, index) => (
+        {orderedElements.map((element, index) => (
           <ThumbnailElement key={element.id} elementInfo={element} elementIndex={index + 1} />
         ))}
       </div>

@@ -1,5 +1,5 @@
 export function mtable(element, targetParent, previousSibling, nextSibling, ancestors) {
-  const cellsPerRowCount = Math.max(...element.children.map((row) => row.children.length))
+  const cellsPerRowCount = Math.max(...element.children.map((row) => row.children.length));
   const targetElement = {
     name: 'm:m',
     type: 'tag',
@@ -14,17 +14,17 @@ export function mtable(element, targetParent, previousSibling, nextSibling, ance
             name: 'm:baseJc',
             type: 'tag',
             attribs: {
-              'm:val': 'center'
+              'm:val': 'center',
             },
-            children: []
+            children: [],
           },
           {
             name: 'm:plcHide',
             type: 'tag',
             attribs: {
-              'm:val': 'on'
+              'm:val': 'on',
             },
-            children: []
+            children: [],
           },
           {
             name: 'm:mcs',
@@ -45,30 +45,30 @@ export function mtable(element, targetParent, previousSibling, nextSibling, ance
                         name: 'm:count',
                         type: 'tag',
                         attribs: {
-                          'm:val': cellsPerRowCount.toString()
+                          'm:val': cellsPerRowCount.toString(),
                         },
-                        children: []
+                        children: [],
                       },
                       {
                         name: 'm:mcJc',
                         type: 'tag',
                         attribs: {
-                          'm:val': 'center'
+                          'm:val': 'center',
                         },
-                        children: []
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      }
-    ]
-  }
-  targetParent.children.push(targetElement)
-  return targetElement
+                        children: [],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  targetParent.children.push(targetElement);
+  return targetElement;
 }
 
 export function mtd(element, targetParent, previousSibling, nextSibling, ancestors) {
@@ -77,10 +77,10 @@ export function mtd(element, targetParent, previousSibling, nextSibling, ancesto
     name: 'm:e',
     type: 'tag',
     attribs: {},
-    children: []
-  }
-  targetParent.children.push(targetElement)
-  return targetElement
+    children: [],
+  };
+  targetParent.children.push(targetElement);
+  return targetElement;
 }
 
 export function mtr(element, targetParent, previousSibling, nextSibling, ancestors) {
@@ -89,8 +89,8 @@ export function mtr(element, targetParent, previousSibling, nextSibling, ancesto
     name: 'm:mr',
     type: 'tag',
     attribs: {},
-    children: []
-  }
-  targetParent.children.push(targetElement)
-  return targetElement
+    children: [],
+  };
+  targetParent.children.push(targetElement);
+  return targetElement;
 }

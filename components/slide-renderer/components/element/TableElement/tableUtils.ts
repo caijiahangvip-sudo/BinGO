@@ -1,13 +1,17 @@
 import type { CSSProperties } from 'react';
 import type { TableCell, TableCellStyle } from '@/lib/types/slides';
+import { resolveScreenFontFamily } from '@/lib/constants/fonts';
+import { repairMathDisplayText } from '@/lib/utils/math-display-repair';
 
 /**
  * Convert TableCellStyle to CSS properties
  */
 export function getTextStyle(style?: TableCellStyle): CSSProperties {
-  if (!style) return {};
+  const css: CSSProperties = {
+    textAlign: 'center',
+  };
 
-  const css: CSSProperties = {};
+  if (!style) return css;
 
   if (style.bold) css.fontWeight = 'bold';
   if (style.em) css.fontStyle = 'italic';
@@ -18,7 +22,7 @@ export function getTextStyle(style?: TableCellStyle): CSSProperties {
   if (style.color) css.color = style.color;
   if (style.backcolor) css.backgroundColor = style.backcolor;
   if (style.fontsize) css.fontSize = style.fontsize;
-  if (style.fontname) css.fontFamily = style.fontname;
+  if (style.fontname) css.fontFamily = resolveScreenFontFamily(style.fontname);
   if (style.align) css.textAlign = style.align;
 
   return css;
@@ -28,7 +32,7 @@ export function getTextStyle(style?: TableCellStyle): CSSProperties {
  * Format text: convert \n to <br/> and spaces to &nbsp;
  */
 export function formatText(text: string): string {
-  return text.replace(/\n/g, '<br/>').replace(/ /g, '&nbsp;');
+  return repairMathDisplayText(text.replace(/\n/g, '<br/>').replace(/ /g, '&nbsp;'));
 }
 
 /**

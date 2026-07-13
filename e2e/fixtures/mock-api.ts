@@ -4,7 +4,7 @@ import { mockSceneContentResponse } from './test-data/scene-content';
 import { createMockSceneActionsResponse } from './test-data/scene-actions';
 
 /**
- * Wraps Playwright's page.route() to mock OpenMAIC API endpoints.
+ * Wraps Playwright's page.route() to mock Bingo API endpoints.
  * Supports both JSON and SSE (text/event-stream) responses.
  */
 export class MockApi {
@@ -55,7 +55,7 @@ export class MockApi {
     });
   }
 
-  /** Mock the server providers endpoint (returns empty — client-side config only) */
+  /** Mock the server providers endpoint (returns empty - client-side config only) */
   async mockServerProviders() {
     await this.page.route('**/api/server-providers', (route) => {
       route.fulfill({

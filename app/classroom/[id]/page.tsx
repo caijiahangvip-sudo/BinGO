@@ -1,21 +1,27 @@
 'use client';
 
 import { Stage } from '@/components/stage';
-import { ThemeProvider } from '@/lib/hooks/use-theme';
 import { useStageStore } from '@/lib/store';
-import { loadImageMapping } from '@/lib/utils/image-storage';
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useSceneGenerator } from '@/lib/hooks/use-scene-generator';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { createLogger } from '@/lib/logger';
 import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
-import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
+import { completeBookLesson } from '@/lib/utils/book-learning-storage';
+import {
+  buildSceneGenerationParams,
+  consumeAutoStartFirstLecture,
+} from '@/lib/utils/classroom-generation-params';
+import { useI18n } from '@/lib/hooks/use-i18n';
+import { toast } from 'sonner';
 
 const log = createLogger('Classroom');
 
 export default function ClassroomDetailPage() {
+  const router = useRouter();
+  const { locale } = useI18n();
   const params = useParams();
   const classroomId = params?.id as string;
 
@@ -23,8 +29,9 @@ export default function ClassroomDetailPage() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [autoStartInitialLecture, setAutoStartInitialLecture] = useState(false);
 
-  const generationStartedRef = useRef(false);
+  const loadTokenRef = useRef(0);
 
   const { generateRemaining, retrySingleOutline, stop } = useSceneGenerator({
     onComplete: () => {
@@ -32,12 +39,53 @@ export default function ClassroomDetailPage() {
     },
   });
 
+  const handleFinishBookLesson = useCallback(async () => {
+    const stage = useStageStore.getState().stage;
+    const context = stage?.bookLessonContext;
+    if (!stage?.id || !context) return;
+
+    await useStageStore.getState().saveToStorage();
+    await completeBookLesson(context.planId, context.lessonId, { stageId: stage.id });
+    sessionStorage.removeItem('generationParams');
+    toast.success(locale === 'zh-CN' ? '本节课已完成' : 'Lesson completed');
+    router.push('/');
+  }, [locale, router]);
+
+  const restoreClassroomMedia = useCallback(async (stageId: string, token: number) => {
+    await useMediaGenerationStore.getState().restoreFromDB(stageId, {
+      shouldApply: () =>
+        loadTokenRef.current === token && useStageStore.getState().stage?.id === stageId,
+    });
+  }, []);
+
+  const startBackgroundGeneration = useCallback(
+    (stageId: string, token: number) => {
+      const stage = useStageStore.getState().stage;
+      if (!stage || stage.id !== stageId) return;
+
+      void buildSceneGenerationParams(stage)
+        .then((generationParams) => {
+          if (loadTokenRef.current !== token || useStageStore.getState().stage?.id !== stageId) {
+            return;
+          }
+          return generateRemaining(generationParams);
+        })
+        .catch((generationError) => {
+          log.warn('Failed to start background scene generation:', generationError);
+        });
+    },
+    [generateRemaining],
+  );
+
   const loadClassroom = useCallback(async () => {
+    const token = ++loadTokenRef.current;
+    let shouldRestoreMedia = false;
+
     try {
       await loadFromStorage(classroomId);
 
-      // If IndexedDB had no data, try server-side storage (API-generated classrooms)
-      if (!useStageStore.getState().stage) {
+      // If IndexedDB had no data for this id, try server-side storage (API-generated classrooms).
+      if (useStageStore.getState().stage?.id !== classroomId) {
         log.info('No IndexedDB data, trying server-side storage for:', classroomId);
         try {
           const res = await fetch(`/api/classroom?id=${encodeURIComponent(classroomId)}`);
@@ -67,8 +115,6 @@ export default function ClassroomDetailPage() {
         }
       }
 
-      // Restore completed media generation tasks from IndexedDB
-      await useMediaGenerationStore.getState().restoreFromDB(classroomId);
       // Restore agents for this stage
       const { loadGeneratedAgentsForStage, useAgentRegistry } =
         await import('@/lib/orchestration/registry/store');
@@ -96,20 +142,41 @@ export default function ClassroomDetailPage() {
             cleanIds && cleanIds.length > 0 ? cleanIds : ['default-1', 'default-2', 'default-3'],
           );
       }
+
+      if (useStageStore.getState().stage?.id !== classroomId) {
+        throw new Error(locale === 'zh-CN' ? '未找到这个课堂' : 'Classroom not found');
+      }
+
+      if (loadTokenRef.current === token && consumeAutoStartFirstLecture(classroomId)) {
+        setAutoStartInitialLecture(true);
+      }
+
+      shouldRestoreMedia = true;
     } catch (error) {
       log.error('Failed to load classroom:', error);
-      setError(error instanceof Error ? error.message : 'Failed to load classroom');
+      if (loadTokenRef.current === token) {
+        setError(error instanceof Error ? error.message : 'Failed to load classroom');
+      }
     } finally {
-      setLoading(false);
+      if (loadTokenRef.current === token) {
+        setLoading(false);
+      }
     }
-  }, [classroomId, loadFromStorage]);
+
+    if (shouldRestoreMedia && loadTokenRef.current === token) {
+      void restoreClassroomMedia(classroomId, token).catch((mediaError) => {
+        log.warn('Failed to restore classroom media:', mediaError);
+      });
+      startBackgroundGeneration(classroomId, token);
+    }
+  }, [classroomId, loadFromStorage, locale, restoreClassroomMedia, startBackgroundGeneration]);
 
   useEffect(() => {
     // Reset loading state on course switch to unmount Stage during transition,
     // preventing stale data from syncing back to the new course
     setLoading(true);
     setError(null);
-    generationStartedRef.current = false;
+    setAutoStartInitialLecture(false);
 
     // Clear previous classroom's media tasks to prevent cross-classroom contamination.
     // Placeholder IDs (gen_img_1, gen_vid_1) are NOT globally unique across stages,
@@ -125,89 +192,45 @@ export default function ClassroomDetailPage() {
 
     // Cancel ongoing generation when classroomId changes or component unmounts
     return () => {
+      loadTokenRef.current += 1;
       stop();
     };
   }, [classroomId, loadClassroom, stop]);
 
-  // Auto-resume generation for pending outlines
-  useEffect(() => {
-    if (loading || error || generationStartedRef.current) return;
-
-    const state = useStageStore.getState();
-    const { outlines, scenes, stage } = state;
-
-    // Check if there are pending outlines
-    const completedOrders = new Set(scenes.map((s) => s.order));
-    const hasPending = outlines.some((o) => !completedOrders.has(o.order));
-
-    if (hasPending && stage) {
-      generationStartedRef.current = true;
-
-      // Load generation params from sessionStorage (stored by generation-preview before navigating)
-      const genParamsStr = sessionStorage.getItem('generationParams');
-      const params = genParamsStr ? JSON.parse(genParamsStr) : {};
-
-      // Reconstruct imageMapping from IndexedDB using pdfImages storageIds
-      const storageIds = (params.pdfImages || [])
-        .map((img: { storageId?: string }) => img.storageId)
-        .filter(Boolean);
-
-      loadImageMapping(storageIds).then((imageMapping) => {
-        generateRemaining({
-          pdfImages: params.pdfImages,
-          imageMapping,
-          stageInfo: {
-            name: stage.name || '',
-            description: stage.description,
-            language: stage.language,
-            style: stage.style,
-          },
-          agents: params.agents,
-          userProfile: params.userProfile,
-        });
-      });
-    } else if (outlines.length > 0 && stage) {
-      // All scenes are generated, but some media may not have finished.
-      // Resume media generation for any tasks not yet in IndexedDB.
-      // generateMediaForOutlines skips already-completed tasks automatically.
-      generationStartedRef.current = true;
-      generateMediaForOutlines(outlines, stage.id).catch((err) => {
-        log.warn('[Classroom] Media generation resume error:', err);
-      });
-    }
-  }, [loading, error, generateRemaining]);
-
   return (
-    <ThemeProvider>
-      <MediaStageProvider value={classroomId}>
-        <div className="h-screen flex flex-col overflow-hidden">
-          {loading ? (
-            <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-              <div className="text-center text-muted-foreground">
-                <p>Loading classroom...</p>
-              </div>
+    <MediaStageProvider value={classroomId}>
+      <div className="h-screen flex flex-col overflow-hidden">
+        {loading ? (
+          <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+            <div className="text-center text-muted-foreground">
+              <p>Loading classroom...</p>
             </div>
-          ) : error ? (
-            <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-              <div className="text-center">
-                <p className="text-destructive mb-4">Error: {error}</p>
-                <button
-                  onClick={() => {
-                    setError(null);
-                    setLoading(true);
-                    loadClassroom();
-                  }}
-                  className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-                >
-                  Retry
-                </button>
-              </div>
+          </div>
+        ) : error ? (
+          <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+            <div className="text-center">
+              <p className="text-destructive mb-4">Error: {error}</p>
+              <button
+                onClick={() => {
+                  setError(null);
+                  setLoading(true);
+                  loadClassroom();
+                }}
+                className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+              >
+                Retry
+              </button>
             </div>
-          ) : (
-            <Stage onRetryOutline={retrySingleOutline} />
-          )}
-        </div>
-      </MediaStageProvider>
-    </ThemeProvider>
+          </div>
+        ) : (
+          <Stage
+            onRetryOutline={retrySingleOutline}
+            onFinishBookLesson={handleFinishBookLesson}
+            autoStartInitialLecture={autoStartInitialLecture}
+            onInitialLectureAutoStarted={() => setAutoStartInitialLecture(false)}
+          />
+        )}
+      </div>
+    </MediaStageProvider>
   );
 }

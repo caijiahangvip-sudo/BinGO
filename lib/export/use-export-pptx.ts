@@ -16,6 +16,7 @@ import type {
   PPTElementShadow,
   PPTElementLink,
 } from '@/lib/types/slides';
+import { normalizeShapeViewBox } from '@/lib/utils/shape-view-box';
 import type { Scene, SlideContent } from '@/lib/types/stage';
 import type { SpeechAction } from '@/lib/types/action';
 import { getElementRange, getLineElementPath, getTableSubThemeColor } from '@/lib/utils/element';
@@ -24,11 +25,30 @@ import { type SvgPoints, toPoints, getSvgPathRange } from '@/lib/export/svg-path
 import { svg2Base64 } from '@/lib/export/svg2base64';
 import { latexToOmml } from '@/lib/export/latex-to-omml';
 import { createLogger } from '@/lib/logger';
+import { resolvePrintFontFace } from '@/lib/constants/fonts';
+import {
+  ensureCenteredParagraphText,
+  hasCenteredTextAlign,
+  hasExplicitTextAlign,
+  hasVisibleTextBoxFill,
+  shouldAutoCenterBoxText,
+} from '@/lib/utils/text-box-alignment';
+import { sanitizeExportFileName } from '@/lib/utils/export-file-name';
 
 const log = createLogger('ExportPPTX');
 
 const DEFAULT_FONT_SIZE = 16;
-const DEFAULT_FONT_FAMILY = 'Microsoft YaHei';
+
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&gt;/g, '>')
+    .replace(/&lt;/g, '<')
+    .replace(/&amp;/g, '&')
+    .trim();
+}
 
 // ── Color formatting ──
 
@@ -107,6 +127,7 @@ function formatHTML(html: string, ratioPx2Pt: number) {
           .replace(/&amp;/g, '&')
           .replace(/\n/g, '');
         const options: pptxgen.TextPropsOptions = {};
+        options.fontFace = resolvePrintFontFace(styleObj['font-family'], text);
 
         if (styleObj['font-size']) {
           options.fontSize = parseInt(styleObj['font-size']) / ratioPx2Pt;
@@ -146,7 +167,9 @@ function formatHTML(html: string, ratioPx2Pt: number) {
         if (styleObj['text-align']) options.align = styleObj['text-align'] as pptxgen.HAlign;
         if (styleObj['font-weight']) options.bold = styleObj['font-weight'] === 'bold';
         if (styleObj['font-style']) options.italic = styleObj['font-style'] === 'italic';
-        if (styleObj['font-family']) options.fontFace = styleObj['font-family'];
+        if (styleObj['font-family']) {
+          options.fontFace = resolvePrintFontFace(styleObj['font-family'], text);
+        }
         if (styleObj['href']) options.hyperlink = { url: styleObj['href'] };
 
         if (bulletFlag && styleObj['list-type'] === 'ol') {
@@ -427,21 +450,34 @@ async function buildPptxBlob(
     for (const el of slide.elements) {
       // ── TEXT ──
       if (el.type === 'text') {
-        const textProps = formatHTML(el.content, ratioPx2Pt);
+        const shouldCenterText =
+          hasVisibleTextBoxFill(el.fill) &&
+          (!hasExplicitTextAlign(el.content) || hasCenteredTextAlign(el.content)) &&
+          shouldAutoCenterBoxText({
+            html: el.content,
+            boxWidth: el.width,
+            boxHeight: el.height,
+          });
+        const normalizedText = shouldCenterText
+          ? ensureCenteredParagraphText(el.content)
+          : el.content;
+        const textProps = formatHTML(normalizedText, ratioPx2Pt);
+        const plainText = htmlToPlainText(normalizedText);
         const options: pptxgen.TextPropsOptions = {
           x: el.left / ratioPx2Inch,
           y: el.top / ratioPx2Inch,
           w: el.width / ratioPx2Inch,
           h: el.height / ratioPx2Inch,
           fontSize: DEFAULT_FONT_SIZE / ratioPx2Pt,
-          fontFace: el.defaultFontName || DEFAULT_FONT_FAMILY,
+          fontFace: resolvePrintFontFace(el.defaultFontName, plainText),
           color: '#000000',
-          valign: 'top',
+          valign: shouldCenterText ? 'middle' : 'top',
           margin: 10 / ratioPx2Pt,
           paraSpaceBefore: 5 / ratioPx2Pt,
           lineSpacingMultiple: 1.5 / 1.25,
           autoFit: true,
         };
+        if (shouldCenterText) options.align = 'center';
         if (el.rotate) options.rotate = el.rotate;
         if (el.wordSpace) options.charSpacing = el.wordSpace / ratioPx2Pt;
         if (el.lineHeight) options.lineSpacingMultiple = el.lineHeight / 1.25;
@@ -454,7 +490,9 @@ async function buildPptxBlob(
           };
         }
         if (el.defaultColor) options.color = formatColor(el.defaultColor).color;
-        if (el.defaultFontName) options.fontFace = el.defaultFontName;
+        if (el.defaultFontName) {
+          options.fontFace = resolvePrintFontFace(el.defaultFontName, plainText);
+        }
         if (el.shadow) options.shadow = getShadowOption(el.shadow, ratioPx2Pt);
         if (el.outline?.width) options.line = getOutlineOption(el.outline, ratioPx2Pt);
         if (el.opacity !== undefined) options.transparency = (1 - el.opacity) * 100;
@@ -540,13 +578,18 @@ async function buildPptxBlob(
 
       // ── SHAPE ──
       else if (el.type === 'shape') {
+        const [viewBoxWidth, viewBoxHeight] = normalizeShapeViewBox(
+          el.viewBox,
+          el.width,
+          el.height,
+        );
         if (el.special) {
           // Special shapes: render as SVG image
           // Create a temporary SVG element from the path
           const svgNS = 'http://www.w3.org/2000/svg';
           const svg = document.createElementNS(svgNS, 'svg');
           svg.setAttribute('xmlns', svgNS);
-          svg.setAttribute('viewBox', `0 0 ${el.viewBox[0]} ${el.viewBox[1]}`);
+          svg.setAttribute('viewBox', `0 0 ${viewBoxWidth} ${viewBoxHeight}`);
           svg.setAttribute('width', String(el.width));
           svg.setAttribute('height', String(el.height));
 
@@ -578,8 +621,8 @@ async function buildPptxBlob(
           pptxSlide.addImage(imgOptions);
         } else {
           const scale = {
-            x: el.width / el.viewBox[0],
-            y: el.height / el.viewBox[1],
+            x: el.width / viewBoxWidth,
+            y: el.height / viewBoxHeight,
           };
           const points = formatPoints(toPoints(el.path), ratioPx2Inch, scale);
 
@@ -620,21 +663,36 @@ async function buildPptxBlob(
 
         // Shape text overlay
         if (el.text) {
-          const textProps = formatHTML(el.text.content, ratioPx2Pt);
+          const shouldCenterShapeText =
+            el.text.align === 'middle' &&
+            (!hasExplicitTextAlign(el.text.content) || hasCenteredTextAlign(el.text.content)) &&
+            shouldAutoCenterBoxText({
+              html: el.text.content,
+              boxWidth: el.width,
+              boxHeight: el.height,
+            });
+          const normalizedText = shouldCenterShapeText
+            ? ensureCenteredParagraphText(el.text.content)
+            : el.text.content;
+          const textProps = formatHTML(normalizedText, ratioPx2Pt);
+          const shapeTextContent = htmlToPlainText(normalizedText);
           const textOptions: pptxgen.TextPropsOptions = {
             x: el.left / ratioPx2Inch,
             y: el.top / ratioPx2Inch,
             w: el.width / ratioPx2Inch,
             h: el.height / ratioPx2Inch,
             fontSize: DEFAULT_FONT_SIZE / ratioPx2Pt,
-            fontFace: DEFAULT_FONT_FAMILY,
+            fontFace: resolvePrintFontFace(el.text.defaultFontName, shapeTextContent),
             color: '#000000',
             paraSpaceBefore: 5 / ratioPx2Pt,
             valign: el.text.align,
           };
           if (el.rotate) textOptions.rotate = el.rotate;
+          if (shouldCenterShapeText) textOptions.align = 'center';
           if (el.text.defaultColor) textOptions.color = formatColor(el.text.defaultColor).color;
-          if (el.text.defaultFontName) textOptions.fontFace = el.text.defaultFontName;
+          if (el.text.defaultFontName) {
+            textOptions.fontFace = resolvePrintFontFace(el.text.defaultFontName, shapeTextContent);
+          }
 
           pptxSlide.addText(textProps, textOptions);
         }
@@ -827,9 +885,9 @@ async function buildPptxBlob(
               bold: cell.style?.bold || false,
               italic: cell.style?.em || false,
               underline: { style: cell.style?.underline ? 'sng' : 'none' },
-              align: cell.style?.align || 'left',
+              align: cell.style?.align || 'center',
               valign: 'middle',
-              fontFace: cell.style?.fontname || DEFAULT_FONT_FAMILY,
+              fontFace: resolvePrintFontFace(cell.style?.fontname, cell.text),
               fontSize: (cell.style?.fontsize ? parseInt(cell.style.fontsize) : 14) / ratioPx2Pt,
             };
             if (theme && themeColor) {
@@ -1106,7 +1164,7 @@ export function useExportPPTX() {
   // ── Export PPTX only ──
   const exportPPTX = useCallback(() => {
     withExportGuard(async () => {
-      const fileName = stage?.name || 'slides';
+      const fileName = sanitizeExportFileName(stage?.name, { fallback: 'slides', maxLength: 60 });
       const blob = await buildPptxBlob(
         slides,
         slideScenes,
@@ -1135,7 +1193,7 @@ export function useExportPPTX() {
     withExportGuard(async () => {
       const JSZip = (await import('jszip')).default;
       const zip = new JSZip();
-      const fileName = stage?.name || 'slides';
+      const fileName = sanitizeExportFileName(stage?.name, { fallback: 'slides', maxLength: 60 });
 
       // 1. Generate PPTX
       const pptxBlob = await buildPptxBlob(
@@ -1153,7 +1211,10 @@ export function useExportPPTX() {
       for (const scene of scenes) {
         if (scene.content.type === 'interactive' && scene.content.html) {
           interactiveIndex++;
-          const safeName = scene.title.replace(/[\\/:*?"<>|]/g, '_');
+          const safeName = sanitizeExportFileName(scene.title, {
+            fallback: `interactive-${interactiveIndex}`,
+            maxLength: 40,
+          });
           const htmlFileName = `interactive/${String(interactiveIndex).padStart(2, '0')}_${safeName}.html`;
           zip.file(htmlFileName, scene.content.html);
         }

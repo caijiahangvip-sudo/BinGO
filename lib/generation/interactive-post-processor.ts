@@ -7,7 +7,10 @@
  * - LaTeX delimiter conversion ($$...$$ -> \[...\], $...$ -> \(...\))
  * - KaTeX CSS/JS injection with auto-render and MutationObserver
  * - Script tag protection during LaTeX conversion
+ * - Compact centered-card layout detection and full-stage repair
  */
+
+export const INTERACTIVE_COMPACT_REPAIR_MARKER = 'data-bingo-interactive-compact-repair';
 
 /**
  * Main entry point: post-process generated interactive HTML
@@ -22,7 +25,153 @@ export function postProcessInteractiveHtml(html: string): string {
     processed = injectKatex(processed);
   }
 
-  return processed;
+  return repairCompactInteractiveLayout(processed);
+}
+
+/**
+ * Detect AI-generated pages that render as a small centered card inside the
+ * 16:9 iframe and inject CSS that turns the top-level app shell into a
+ * full-stage classroom interaction.
+ */
+export function repairCompactInteractiveLayout(html: string): string {
+  if (!needsCompactInteractiveRepair(html)) return html;
+  return injectCompactInteractiveRepairCss(html);
+}
+
+export function needsCompactInteractiveRepair(html: string): boolean {
+  if (!html.trim()) return false;
+  if (html.includes(INTERACTIVE_COMPACT_REPAIR_MARKER)) return false;
+  if (hasKnownDeterministicTemplate(html)) return false;
+
+  const normalized = html.replace(/\s+/g, ' ').toLowerCase();
+  const bodyCss = extractCssRule(normalized, 'body');
+  const mainCss = extractCssRule(normalized, 'main');
+  const appCss = extractCssRule(normalized, '.app') || extractCssRule(normalized, '#app');
+
+  const pageCentersContent =
+    /display\s*:\s*grid/.test(bodyCss) && /place-items\s*:\s*center/.test(bodyCss);
+  const pageFlexCentersContent =
+    /display\s*:\s*flex/.test(bodyCss) &&
+    /(?:align-items|justify-content)\s*:\s*center/.test(bodyCss);
+  const hasPageCentering =
+    pageCentersContent || pageFlexCentersContent || /place-items\s*:\s*center/.test(normalized);
+
+  const rootCss = `${mainCss} ${appCss}`;
+  const hasConstrainedRoot =
+    /width\s*:\s*min\s*\(/.test(rootCss) ||
+    /max-width\s*:\s*(?:\d{2,4}px|[0-9.]+rem)/.test(rootCss) ||
+    /min-height\s*:\s*min\s*\(/.test(rootCss);
+  const hasFallbackSignature =
+    /width\s*:\s*min\s*\(\s*920px\s*,\s*92vw\s*\)/.test(normalized) ||
+    /min-height\s*:\s*min\s*\(\s*500px\s*,\s*86vh\s*\)/.test(normalized);
+
+  return hasFallbackSignature || (hasPageCentering && hasConstrainedRoot);
+}
+
+function hasKnownDeterministicTemplate(html: string): boolean {
+  return /\bdata-template\s*=\s*["']angle-relations["']/i.test(html);
+}
+
+function extractCssRule(normalizedHtml: string, selector: string): string {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const matches = normalizedHtml.matchAll(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`, 'gi'));
+  return Array.from(matches, (match) => match[1] || '').join(' ');
+}
+
+function injectCompactInteractiveRepairCss(html: string): string {
+  const repairCss = `
+<style ${INTERACTIVE_COMPACT_REPAIR_MARKER}>
+  html,
+  body {
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body {
+    display: block !important;
+    place-items: initial !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+    background: #f8fafc !important;
+  }
+
+  body > :where(main, .app, #app, .container, .wrapper, .page, .card, .panel, section, div):first-of-type {
+    width: 100vw !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    height: 100vh !important;
+    min-height: 100vh !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    display: grid !important;
+    grid-template-rows: auto minmax(0, 1fr) auto !important;
+    gap: clamp(14px, 2.2vh, 28px) !important;
+    padding: clamp(22px, 3.4vw, 48px) !important;
+    overflow: hidden !important;
+  }
+
+  body > :where(main, .app, #app, .container, .wrapper, .page, .card, .panel, section, div):first-of-type > * {
+    min-width: 0 !important;
+  }
+
+  .choices,
+  .options,
+  .answers {
+    width: 100% !important;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: clamp(14px, 2.2vw, 28px) !important;
+    align-self: stretch !important;
+  }
+
+  button,
+  [role='button'] {
+    min-height: clamp(104px, 20vh, 220px) !important;
+    font-size: clamp(18px, 2.1vw, 28px) !important;
+    line-height: 1.35 !important;
+  }
+
+  #feedback,
+  .feedback {
+    min-height: clamp(56px, 8vh, 96px) !important;
+    font-size: clamp(16px, 1.7vw, 22px) !important;
+  }
+
+  svg,
+  canvas {
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 300px !important;
+    display: block !important;
+  }
+
+  @media (max-width: 720px) {
+    .choices,
+    .options,
+    .answers {
+      grid-template-columns: 1fr !important;
+    }
+  }
+</style>`;
+
+  const headCloseMatch = /<\/head\s*>/i.exec(html);
+  if (headCloseMatch?.index !== undefined) {
+    const idx = headCloseMatch.index;
+    return html.substring(0, idx) + repairCss + '\n' + html.substring(idx);
+  }
+
+  const bodyCloseMatch = /<\/body\s*>/i.exec(html);
+  if (bodyCloseMatch?.index !== undefined) {
+    const idx = bodyCloseMatch.index;
+    return html.substring(0, idx) + repairCss + '\n' + html.substring(idx);
+  }
+
+  return html + repairCss;
 }
 
 /**

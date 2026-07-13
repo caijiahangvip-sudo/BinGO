@@ -19,6 +19,8 @@ import {
   Trash2,
   Play,
   Minus,
+  GraduationCap,
+  CircleHelp,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -74,6 +76,8 @@ const ACTION_CONFIG: Record<string, ActionCfg> = {
 
   // Social
   discussion: { label: 'Discuss', Icon: MessageSquare, style: DISCUSS_STYLE },
+  wait_for_user_teaching: { label: 'Teach', Icon: GraduationCap, style: DISCUSS_STYLE },
+  request_clarification: { label: 'Clarify', Icon: CircleHelp, style: DISCUSS_STYLE },
 };
 
 // ── Component ─────────────────────────────────────────────────

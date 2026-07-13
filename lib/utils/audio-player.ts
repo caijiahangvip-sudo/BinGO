@@ -10,6 +10,8 @@ import { db } from '@/lib/utils/database';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('AudioPlayer');
+const AUDIO_READY_TIMEOUT_MS = 3000;
+const MIN_VALID_DURATION_SECONDS = 0.05;
 
 /**
  * Audio player implementation
@@ -20,6 +22,55 @@ export class AudioPlayer {
   private muted: boolean = false;
   private volume: number = 1;
   private playbackRate: number = 1;
+  private objectUrl: string | null = null;
+
+  private waitUntilPlayable(audio: HTMLAudioElement): Promise<void> {
+    const hasInvalidDuration = () =>
+      Number.isFinite(audio.duration) && audio.duration < MIN_VALID_DURATION_SECONDS;
+
+    if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      if (hasInvalidDuration()) {
+        return Promise.reject(new Error(`Audio has invalid duration: ${audio.duration}s`));
+      }
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        audio.removeEventListener('loadedmetadata', onReady);
+        audio.removeEventListener('loadeddata', onReady);
+        audio.removeEventListener('canplay', onReady);
+        audio.removeEventListener('error', onError);
+      };
+
+      const onReady = () => {
+        cleanup();
+        if (hasInvalidDuration()) {
+          reject(new Error(`Audio has invalid duration: ${audio.duration}s`));
+          return;
+        }
+        resolve();
+      };
+
+      const onError = () => {
+        cleanup();
+        const errorCode = audio.error?.code ? ` code=${audio.error.code}` : '';
+        reject(new Error(`${audio.error?.message || 'Audio failed to load'}${errorCode}`));
+      };
+
+      const timeout = window.setTimeout(() => {
+        cleanup();
+        reject(new Error('Audio did not become playable'));
+      }, AUDIO_READY_TIMEOUT_MS);
+
+      audio.addEventListener('loadedmetadata', onReady, { once: true });
+      audio.addEventListener('loadeddata', onReady, { once: true });
+      audio.addEventListener('canplay', onReady, { once: true });
+      audio.addEventListener('error', onError, { once: true });
+      audio.load();
+    });
+  }
 
   /**
    * Play audio (from URL or IndexedDB pre-generated cache)
@@ -41,6 +92,7 @@ export class AudioPlayer {
         this.audio.addEventListener('ended', () => {
           this.onEndedCallback?.();
         });
+        await this.waitUntilPlayable(this.audio);
         await this.audio.play();
         this.audio.playbackRate = this.playbackRate;
         return true;
@@ -50,9 +102,20 @@ export class AudioPlayer {
       const audioRecord = await db.audioFiles.get(audioId);
 
       if (!audioRecord) {
-        // Pre-generated audio does not exist (generation failed), skip silently
+        log.debug?.('No cached audio found:', audioId);
         return false;
       }
+
+      if (!audioRecord.blob || audioRecord.blob.size === 0) {
+        log.warn('Cached audio is empty:', audioId);
+        return false;
+      }
+      log.debug?.('Playing cached audio:', {
+        audioId,
+        size: audioRecord.blob.size,
+        type: audioRecord.blob.type || 'unknown',
+        format: audioRecord.format,
+      });
 
       // Stop current playback
       this.stop();
@@ -62,6 +125,7 @@ export class AudioPlayer {
 
       // Set audio source
       const blobUrl = URL.createObjectURL(audioRecord.blob);
+      this.objectUrl = blobUrl;
       this.audio.src = blobUrl;
       if (this.muted) this.audio.volume = 0;
       else this.audio.volume = this.volume;
@@ -72,17 +136,22 @@ export class AudioPlayer {
 
       // Set ended callback
       this.audio.addEventListener('ended', () => {
-        URL.revokeObjectURL(blobUrl);
+        if (this.objectUrl === blobUrl) {
+          URL.revokeObjectURL(blobUrl);
+          this.objectUrl = null;
+        }
         this.onEndedCallback?.();
       });
 
       // Play
+      await this.waitUntilPlayable(this.audio);
       await this.audio.play();
       // Re-apply after play() — some browsers reset during load
       this.audio.playbackRate = this.playbackRate;
       return true;
     } catch (error) {
       log.error('Failed to play audio:', error);
+      this.stop();
       throw error;
     }
   }
@@ -104,6 +173,10 @@ export class AudioPlayer {
       this.audio.pause();
       this.audio.currentTime = 0;
       this.audio = null;
+    }
+    if (this.objectUrl) {
+      URL.revokeObjectURL(this.objectUrl);
+      this.objectUrl = null;
     }
     // Note: onEndedCallback intentionally NOT cleared here because play()
     // calls stop() internally — clearing would break the callback chain.

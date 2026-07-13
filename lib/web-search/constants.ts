@@ -2,12 +2,16 @@
  * Web Search Provider Constants
  */
 
-import type { WebSearchProviderId, WebSearchProviderConfig } from './types';
+import type {
+  BuiltInWebSearchProviderId,
+  WebSearchProviderConfig,
+} from './types';
 
 /**
  * Web Search Provider Registry
  */
-export const WEB_SEARCH_PROVIDERS: Record<WebSearchProviderId, WebSearchProviderConfig> = {
+export const WEB_SEARCH_PROVIDERS: Record<BuiltInWebSearchProviderId, WebSearchProviderConfig> &
+  Record<string, WebSearchProviderConfig> = {
   tavily: {
     id: 'tavily',
     name: 'Tavily',

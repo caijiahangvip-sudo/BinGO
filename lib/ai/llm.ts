@@ -10,6 +10,8 @@ import { createLogger } from '@/lib/logger';
 import { PROVIDERS } from './providers';
 import { thinkingContext } from './thinking-context';
 import type { ProviderType, ThinkingCapability, ThinkingConfig } from '@/lib/types/provider';
+import { OPENAI_REASONING_EFFORT_XHIGH } from '@/lib/ai/openai-routing';
+import { buildChineseXinhuaPromptContext } from '@/lib/server/chinese-xinhua';
 const log = createLogger('LLM');
 
 // Re-export for external use
@@ -39,6 +41,14 @@ function getModelId(params: GenerateTextParams | StreamTextParams): string {
   return 'unknown';
 }
 
+function getModelProvider(params: GenerateTextParams | StreamTextParams): string {
+  const m = params.model;
+  if (m && typeof m === 'object' && 'provider' in m) {
+    return (m as { provider: string }).provider;
+  }
+  return '';
+}
+
 // ---------------------------------------------------------------------------
 // Thinking / Reasoning Adapter
 //
@@ -46,7 +56,7 @@ function getModelId(params: GenerateTextParams | StreamTextParams): string {
 // map a unified ThinkingConfig into provider-specific providerOptions.
 // Currently handles: openai (native), anthropic (native), google (native).
 // OpenAI-compatible providers (DeepSeek, Qwen, Kimi, GLM, etc.) are NOT
-// handled — their vendor-specific thinking params can't be reliably passed
+// handled - their vendor-specific thinking params can't be reliably passed
 // through Vercel AI SDK's createOpenAI.
 // ---------------------------------------------------------------------------
 
@@ -55,7 +65,7 @@ interface ModelThinkingInfo {
   thinking?: ThinkingCapability;
 }
 
-/** Model ID → provider type + thinking capability (built once at module load) */
+/** Model ID to provider type + thinking capability (built once at module load) */
 const MODEL_THINKING_MAP: Map<string, ModelThinkingInfo> = (() => {
   const map = new Map<string, ModelThinkingInfo>();
   for (const provider of Object.values(PROVIDERS)) {
@@ -101,7 +111,7 @@ function buildDisableThinking(
       } else if (modelId.startsWith('o')) {
         effort = 'low';
       } else {
-        // Non-thinking OpenAI models (gpt-4o etc.) — no injection needed
+        // Non-thinking OpenAI models (gpt-4o etc.) - no injection needed
         return undefined;
       }
       if (!_thinking.toggleable && effort !== 'none') {
@@ -150,13 +160,11 @@ function buildEnableThinking(
   providerType: ProviderType,
   _thinking: ThinkingCapability,
   budgetTokens?: number,
+  effort?: ThinkingConfig['effort'],
 ): ProviderOptions | undefined {
   switch (providerType) {
     case 'openai':
-      // OpenAI uses discrete effort levels, no token-based budget.
-      // Don't inject anything — let the model use its default effort.
-      return undefined;
-
+      return { openai: { reasoningEffort: effort ?? OPENAI_REASONING_EFFORT_XHIGH } };
     case 'anthropic': {
       // 4.6 models: prefer adaptive (model decides depth automatically)
       // 4.5 models: require explicit budget
@@ -191,7 +199,7 @@ function buildEnableThinking(
           },
         };
       }
-      // No budget specified — let model use dynamic default
+      // No budget specified - let model use dynamic default
       return undefined;
     }
 
@@ -217,7 +225,13 @@ function buildThinkingProviderOptions(
   }
 
   // enabled === true
-  return buildEnableThinking(modelId, info.providerType, info.thinking, config.budgetTokens);
+  return buildEnableThinking(
+    modelId,
+    info.providerType,
+    info.thinking,
+    config.budgetTokens,
+    config.effort,
+  );
 }
 
 /**
@@ -225,10 +239,72 @@ function buildThinkingProviderOptions(
  * Gemini 3.x models use thinkingLevel instead of thinkingBudget.
  */
 function getDefaultProviderOptions(modelId: string): ProviderOptions | undefined {
+  const info = MODEL_THINKING_MAP.get(modelId);
+  if (info?.providerType === 'openai' && info.thinking?.defaultEnabled) {
+    return { openai: { reasoningEffort: OPENAI_REASONING_EFFORT_XHIGH } };
+  }
+
   if (modelId === 'gemini-3.1-pro-preview') {
     return { google: { thinkingConfig: { thinkingLevel: 'high' } } };
   }
   return undefined;
+}
+
+function addOpenAIReasoningEffortDefaults<T extends GenerateTextParams | StreamTextParams>(
+  params: T,
+): T {
+  const modelId = getModelId(params);
+  const provider = getModelProvider(params);
+  const providerOptions = ((params as Record<string, unknown>).providerOptions || {}) as Record<
+    string,
+    Record<string, unknown>
+  >;
+
+  const usesOpenAIResponses = provider.includes('openai.responses');
+  const isKnownOpenAIThinkingModel = !!MODEL_THINKING_MAP.get(modelId)?.thinking;
+
+  if (!provider.includes('openai')) return params;
+  if (!usesOpenAIResponses && !isKnownOpenAIThinkingModel) return params;
+  if (providerOptions.openai?.reasoningEffort != null) return params;
+
+  return {
+    ...params,
+    providerOptions: {
+      ...providerOptions,
+      openai: {
+        ...providerOptions.openai,
+        reasoningEffort: OPENAI_REASONING_EFFORT_XHIGH,
+      },
+    },
+  };
+}
+
+async function addChineseXinhuaContextToGenerateParams<T extends GenerateTextParams>(
+  params: T,
+): Promise<T> {
+  const raw = params as Record<string, unknown>;
+  if (raw.__skipChineseXinhuaContext) {
+    const { __skipChineseXinhuaContext: _skip, ...rest } = raw;
+    return rest as T;
+  }
+
+  const promptText =
+    typeof raw.prompt === 'string'
+      ? raw.prompt
+      : Array.isArray(raw.messages)
+        ? JSON.stringify(raw.messages).slice(0, 12000)
+        : '';
+  const context = await buildChineseXinhuaPromptContext({ text: promptText, limit: 8 });
+  if (!context) return params;
+
+  return {
+    ...params,
+    system: `${typeof raw.system === 'string' ? raw.system : ''}\n\n# Chinese Dictionary References\n${context}`,
+  };
+}
+
+function addChineseXinhuaContextToStreamParams<T extends StreamTextParams>(params: T): T {
+  return params;
 }
 
 /**
@@ -236,7 +312,7 @@ function getDefaultProviderOptions(modelId: string): ProviderOptions | undefined
  *
  * For native providers (OpenAI/Anthropic/Google), this sets providerOptions.
  * For OpenAI-compatible providers, providerOptions won't work (stripped by
- * zod schema) — those are handled by the custom fetch wrapper via thinkingContext.
+ * zod schema) - those are handled by the custom fetch wrapper via thinkingContext.
  *
  * Priority: caller's providerOptions > ThinkingConfig > model defaults
  */
@@ -244,20 +320,22 @@ function injectProviderOptions<T extends GenerateTextParams | StreamTextParams>(
   params: T,
   thinking?: ThinkingConfig,
 ): T {
-  if ((params as Record<string, unknown>).providerOptions) return params; // caller explicitly set providerOptions
+  if ((params as Record<string, unknown>).providerOptions) {
+    return addOpenAIReasoningEffortDefaults(params);
+  }
 
   const modelId = getModelId(params);
 
   if (thinking) {
     const opts = buildThinkingProviderOptions(modelId, thinking);
-    if (opts) return { ...params, providerOptions: opts };
+    if (opts) return addOpenAIReasoningEffortDefaults({ ...params, providerOptions: opts });
   }
 
-  // No thinking config — use model defaults (backward compat)
+  // No thinking config - use model defaults (backward compat)
   const defaults = getDefaultProviderOptions(modelId);
-  if (defaults) return { ...params, providerOptions: defaults };
+  if (defaults) return addOpenAIReasoningEffortDefaults({ ...params, providerOptions: defaults });
 
-  return params;
+  return addOpenAIReasoningEffortDefaults(params);
 }
 
 /**
@@ -300,7 +378,8 @@ export async function callLLM<T extends GenerateTextParams>(
     try {
       // Resolve effective thinking config: per-call > global env > undefined
       const effectiveThinking = thinking ?? getGlobalThinkingConfig();
-      const injectedParams = injectProviderOptions(params, effectiveThinking);
+      const paramsWithDictionary = await addChineseXinhuaContextToGenerateParams(params);
+      const injectedParams = injectProviderOptions(paramsWithDictionary, effectiveThinking);
 
       // Wrap in thinkingContext so the custom fetch wrapper in providers.ts
       // can read the config and inject vendor-specific body params for
@@ -329,7 +408,7 @@ export async function callLLM<T extends GenerateTextParams>(
     }
   }
 
-  // All attempts exhausted — return last result or throw last error
+  // All attempts exhausted - return last result or throw last error
   if (lastResult) return lastResult;
   throw lastError;
 }
@@ -351,7 +430,10 @@ export function streamLLM<T extends StreamTextParams>(
 ): StreamTextResult<any, any> {
   // Resolve effective thinking config and wrap in thinkingContext
   const effectiveThinking = thinking ?? getGlobalThinkingConfig();
-  const injectedParams = injectProviderOptions(params, effectiveThinking);
+  const injectedParams = injectProviderOptions(
+    addChineseXinhuaContextToStreamParams(params),
+    effectiveThinking,
+  );
   const result = thinkingContext.run(effectiveThinking, () => streamText(injectedParams));
 
   return result;

@@ -4,6 +4,11 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SSEStream');
 
+interface ProcessSSEStreamOptions {
+  onFinally?: () => void;
+  onError?: (error: Error) => void;
+}
+
 /**
  * Thin SSE parser — reads the /api/chat response stream and pushes
  * typed events into a StreamBuffer. All pacing, state management,
@@ -14,6 +19,7 @@ export async function processSSEStream(
   sessionId: string,
   buffer: StreamBuffer,
   signal?: AbortSignal,
+  options: ProcessSSEStreamOptions = {},
 ): Promise<void> {
   const reader = response.body?.getReader();
   if (!reader) {
@@ -23,6 +29,7 @@ export async function processSSEStream(
   const decoder = new TextDecoder();
   let sseBuffer = '';
   let currentMessageId: string | null = null;
+  let sawDone = false;
 
   try {
     while (true) {
@@ -99,6 +106,7 @@ export async function processSSEStream(
             }
 
             case 'done': {
+              sawDone = true;
               buffer.pushDone(event.data);
               break;
             }
@@ -116,7 +124,18 @@ export async function processSSEStream(
         if (sseError) throw sseError;
       }
     }
+
+    if (!sawDone && !signal?.aborted) {
+      throw new Error(`SSE stream for session ${sessionId} ended before a done event`);
+    }
+  } catch (error) {
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    options.onError?.(normalized);
+    throw normalized;
   } finally {
+    // 防线：无论 SSE 正常结束、500/error 事件、网络断开还是 Abort，
+    // 都清理外层 Thinking/Planning 状态，避免 UI 永久卡在 "Planning..."。
+    options.onFinally?.();
     reader.releaseLock();
   }
 }

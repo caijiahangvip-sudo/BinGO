@@ -34,6 +34,7 @@ import type {
   ASRProviderId,
   ASRProviderConfig,
 } from './types';
+import { getCosyVoiceCloneVoiceOptions } from './cosyvoice-clone';
 
 /**
  * TTS Provider Registry
@@ -635,6 +636,28 @@ export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
     supportedFormats: ['mp3', 'wav', 'pcm'],
   },
 
+  'cosyvoice-tts': {
+    id: 'cosyvoice-tts',
+    name: 'CosyVoice',
+    requiresApiKey: false,
+    defaultBaseUrl: 'http://localhost:50000',
+    icon: '/logos/bailian.svg',
+    models: [
+      { id: 'Fun-CosyVoice3-0.5B-2512_RL', name: 'Fun-CosyVoice3-0.5B-2512_RL' },
+    ],
+    defaultModelId: 'Fun-CosyVoice3-0.5B-2512_RL',
+    voices: [
+      {
+        id: 'zero_shot_prompt',
+        name: '内置参考音色',
+        language: 'zh-CN',
+        gender: 'neutral',
+      },
+    ],
+    supportedFormats: ['wav'],
+    speedRange: { min: 0.5, max: 2.0, default: 1.0 },
+  },
+
   'minimax-tts': {
     id: 'minimax-tts',
     name: 'MiniMax TTS',
@@ -717,12 +740,15 @@ export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
 
   'doubao-tts': {
     id: 'doubao-tts',
-    name: '豆包 TTS 2.0（火山引擎）',
+    name: '豆包',
     requiresApiKey: true,
     defaultBaseUrl: 'https://openspeech.bytedance.com/api/v3/tts',
     icon: '/logos/doubao.svg',
-    models: [],
-    defaultModelId: '',
+    models: [
+      { id: 'seed-tts-2.0', name: '豆包 Seed-TTS 2.0 (Default)' },
+      { id: 'TTS-SeedTTS2.02000000664273178562', name: '豆包 Seed-TTS 2.0 (Custom)' },
+    ],
+    defaultModelId: 'seed-tts-2.0',
     voices: [
       { id: 'zh_female_vv_uranus_bigtts', name: 'Vivi 2.0', language: 'zh-CN', gender: 'female' },
       {
@@ -1031,6 +1057,25 @@ export const ASR_PROVIDERS: Record<ASRProviderId, ASRProviderConfig> = {
     supportedFormats: ['mp3', 'wav', 'webm', 'm4a', 'flac'],
   },
 
+  'sensevoice-asr': {
+    id: 'sensevoice-asr',
+    name: 'SenseVoice',
+    requiresApiKey: false,
+    defaultBaseUrl: 'http://localhost:50001',
+    icon: '/logos/bailian.svg',
+    models: [{ id: 'iic/SenseVoiceSmall', name: 'SenseVoiceSmall' }],
+    defaultModelId: 'iic/SenseVoiceSmall',
+    supportedLanguages: [
+      'auto',
+      'zh',
+      'yue',
+      'en',
+      'ja',
+      'ko',
+    ],
+    supportedFormats: ['mp3', 'wav', 'webm', 'm4a', 'flac', 'ogg', 'aac'],
+  },
+
   'browser-native': {
     id: 'browser-native',
     name: '浏览器原生 ASR (Web Speech API)',
@@ -1122,6 +1167,7 @@ export const DEFAULT_TTS_VOICES: Record<TTSProviderId, string> = {
   'azure-tts': 'zh-CN-XiaoxiaoNeural',
   'glm-tts': 'tongtong',
   'qwen-tts': 'Cherry',
+  'cosyvoice-tts': 'zero_shot_prompt',
   'doubao-tts': 'zh_female_vv_uranus_bigtts',
   'elevenlabs-tts': 'EXAVITQu4vr4xnSDxMaL',
   'minimax-tts': 'female-yujie',
@@ -1133,6 +1179,7 @@ export const DEFAULT_TTS_MODELS: Record<TTSProviderId, string> = {
   'azure-tts': '',
   'glm-tts': 'glm-tts',
   'qwen-tts': 'qwen3-tts-flash',
+  'cosyvoice-tts': 'Fun-CosyVoice3-0.5B-2512_RL',
   'doubao-tts': '',
   'elevenlabs-tts': 'eleven_multilingual_v2',
   'minimax-tts': 'speech-2.8-hd',
@@ -1142,8 +1189,33 @@ export const DEFAULT_TTS_MODELS: Record<TTSProviderId, string> = {
 /**
  * Get voices for a specific TTS provider
  */
-export function getTTSVoices(providerId: TTSProviderId): TTSVoiceInfo[] {
-  return TTS_PROVIDERS[providerId]?.voices || [];
+export function getTTSVoices(
+  providerId: TTSProviderId,
+  modelId?: string,
+  providerOptions?: Record<string, unknown>,
+): TTSVoiceInfo[] {
+  const voices = TTS_PROVIDERS[providerId]?.voices || [];
+  const allVoices =
+    providerId === 'cosyvoice-tts'
+      ? [...voices, ...getCosyVoiceCloneVoiceOptions(providerOptions)]
+      : voices;
+  if (!modelId) return allVoices;
+  return allVoices.filter(
+    (voice) => !voice.compatibleModels || voice.compatibleModels.includes(modelId),
+  );
+}
+
+export function getDefaultTTSVoice(
+  providerId: TTSProviderId,
+  modelId?: string,
+  providerOptions?: Record<string, unknown>,
+): string {
+  const defaultVoice = DEFAULT_TTS_VOICES[providerId];
+  const voices = getTTSVoices(providerId, modelId, providerOptions);
+  if (defaultVoice && voices.some((voice) => voice.id === defaultVoice)) {
+    return defaultVoice;
+  }
+  return voices[0]?.id || defaultVoice || 'default';
 }
 
 /**

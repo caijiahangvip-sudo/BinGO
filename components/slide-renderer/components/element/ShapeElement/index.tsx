@@ -2,6 +2,12 @@
 
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import type { PPTShapeElement, ShapeText } from '@/lib/types/slides';
+import { DEFAULT_SCREEN_FONT_NAME, resolveScreenFontFamily } from '@/lib/constants/fonts';
+import {
+  hasCenteredTextAlign,
+  hasExplicitTextAlign,
+  shouldAutoCenterBoxText,
+} from '@/lib/utils/text-box-alignment';
 import { useCanvasStore } from '@/lib/store';
 import { useCanvasOperations } from '@/lib/hooks/use-canvas-operations';
 import { useHistorySnapshot } from '@/lib/hooks/use-history-snapshot';
@@ -12,6 +18,8 @@ import { useElementOutline } from '../hooks/useElementOutline';
 import { GradientDefs } from './GradientDefs';
 import { PatternDefs } from './PatternDefs';
 import { ProsemirrorEditor } from '../ProsemirrorEditor';
+import { AutoFitTextBox } from '../AutoFitTextBox';
+import { normalizeShapeViewBox } from '@/lib/utils/shape-view-box';
 
 export { BaseShapeElement } from './BaseShapeElement';
 
@@ -59,12 +67,27 @@ export function ShapeElement({ elementInfo, selectElement }: ShapeElementProps) 
     const defaultText: ShapeText = {
       content: '',
       align: 'middle',
-      defaultFontName: 'Microsoft Yahei',
+      defaultFontName: DEFAULT_SCREEN_FONT_NAME,
       defaultColor: '#000000',
     };
     if (!elementInfo.text) return defaultText;
     return elementInfo.text;
   }, [elementInfo.text]);
+  const canAutoCenterText =
+    !hasExplicitTextAlign(text.content) || hasCenteredTextAlign(text.content);
+  const shouldForceCenterText =
+    canAutoCenterText &&
+    text.align === 'middle' &&
+    shouldAutoCenterBoxText({
+      html: text.content,
+      boxWidth: elementInfo.width,
+      boxHeight: elementInfo.height,
+    });
+  const [viewBoxWidth, viewBoxHeight] = normalizeShapeViewBox(
+    elementInfo.viewBox,
+    elementInfo.width,
+    elementInfo.height,
+  );
 
   // Update text content
   const updateText = useCallback(
@@ -118,7 +141,7 @@ export function ShapeElement({ elementInfo, selectElement }: ShapeElementProps) 
             filter: shadowStyle ? `drop-shadow(${shadowStyle})` : '',
             transform: flipStyle,
             color: text.defaultColor,
-            fontFamily: text.defaultFontName,
+            fontFamily: resolveScreenFontFamily(text.defaultFontName),
           }}
           onMouseDown={(e) => handleSelectElement(e)}
           onTouchStart={(e) => handleSelectElement(e)}
@@ -144,8 +167,8 @@ export function ShapeElement({ elementInfo, selectElement }: ShapeElementProps) 
               )}
             </defs>
             <g
-              transform={`scale(${elementInfo.width / elementInfo.viewBox[0]}, ${
-                elementInfo.height / elementInfo.viewBox[1]
+              transform={`scale(${elementInfo.width / viewBoxWidth}, ${
+                elementInfo.height / viewBoxHeight
               }) translate(0,0) matrix(1,0,0,1,0,0)`}
             >
               <path
@@ -162,19 +185,17 @@ export function ShapeElement({ elementInfo, selectElement }: ShapeElementProps) 
             </g>
           </svg>
 
-          <div
-            className={`shape-text absolute inset-0 flex flex-col p-[10px] leading-[1.5] break-words pointer-events-none ${
+          <AutoFitTextBox
+            enabled={!editable}
+            className={`shape-text absolute inset-0 p-[10px] leading-[1.5] break-words pointer-events-none ${
               editable || text.content ? 'pointer-events-auto' : ''
-            } ${
-              text.align === 'top'
-                ? 'justify-start'
-                : text.align === 'bottom'
-                  ? 'justify-end'
-                  : 'justify-center'
             }`}
+            contentClassName="[&_p]:m-0 [&_p+_p]:mt-[var(--paragraphSpace)] [&_ol]:my-0 [&_ul]:my-0 [&_li]:my-0"
+            verticalAlign={text.align}
             style={{
               lineHeight: text.lineHeight,
               letterSpacing: `${text.wordSpace || 0}px`,
+              textAlign: shouldForceCenterText ? 'center' : undefined,
               // @ts-expect-error - CSS custom property
               '--paragraphSpace': `${text.paragraphSpace === undefined ? 5 : text.paragraphSpace}px`,
             }}
@@ -191,7 +212,7 @@ export function ShapeElement({ elementInfo, selectElement }: ShapeElementProps) 
                 onMouseDown={(e) => handleSelectElement(e as React.MouseEvent, false)}
               />
             )}
-          </div>
+          </AutoFitTextBox>
         </div>
       </div>
     </div>

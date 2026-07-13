@@ -10,13 +10,83 @@ import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages';
 import { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
 import { ChatResult } from '@langchain/core/outputs';
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, ModelMessage, UserContent } from 'ai';
 
 import { callLLM, streamLLM } from '@/lib/ai/llm';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('AISdkAdapter');
+
+type OpenAICompatibleContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'image'; image: string; mediaType?: string }
+  | { type: 'file'; data?: string; url?: string; mediaType: string; filename?: string };
+
+function stringifyMessageContent(content: BaseMessage['content']): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return String(content ?? '');
+  }
+
+  return content
+    .map((part) => {
+      const p = part as Record<string, unknown>;
+      if (p.type === 'text' && typeof p.text === 'string') return p.text;
+      if (p.type === 'image_url' || p.type === 'image') return '[image attached]';
+      if (p.type === 'file') return '[file attached]';
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function convertUserContent(content: BaseMessage['content']): UserContent {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return stringifyMessageContent(content);
+  }
+
+  const parts: Exclude<UserContent, string> = [];
+
+  for (const part of content as OpenAICompatibleContentPart[]) {
+    if (part.type === 'text' && typeof part.text === 'string') {
+      parts.push({ type: 'text', text: part.text });
+      continue;
+    }
+
+    if (part.type === 'image_url' && part.image_url && typeof part.image_url.url === 'string') {
+      parts.push({ type: 'image', image: part.image_url.url });
+      continue;
+    }
+
+    if (part.type === 'image' && typeof part.image === 'string') {
+      parts.push({ type: 'image', image: part.image, mediaType: part.mediaType });
+      continue;
+    }
+
+    if (part.type === 'file' && part.mediaType) {
+      const data = part.data || part.url;
+      if (typeof data === 'string') {
+        parts.push({
+          type: 'file',
+          data,
+          mediaType: part.mediaType,
+          filename: part.filename,
+        });
+      }
+    }
+  }
+
+  return parts.length > 0 ? parts : stringifyMessageContent(content);
+}
 
 /**
  * Stream chunk types for streaming generation
@@ -61,18 +131,16 @@ export class AISdkLangGraphAdapter extends BaseChatModel {
   /**
    * Convert LangChain messages to AI SDK message format
    */
-  private convertMessages(
-    messages: BaseMessage[],
-  ): { role: 'system' | 'user' | 'assistant'; content: string }[] {
+  private convertMessages(messages: BaseMessage[]): ModelMessage[] {
     return messages.map((msg) => {
       if (msg instanceof HumanMessage) {
-        return { role: 'user' as const, content: msg.content as string };
+        return { role: 'user' as const, content: convertUserContent(msg.content) };
       } else if (msg instanceof AIMessage) {
-        return { role: 'assistant' as const, content: msg.content as string };
+        return { role: 'assistant' as const, content: stringifyMessageContent(msg.content) };
       } else if (msg instanceof SystemMessage) {
-        return { role: 'system' as const, content: msg.content as string };
+        return { role: 'system' as const, content: stringifyMessageContent(msg.content) };
       } else {
-        return { role: 'user' as const, content: msg.content as string };
+        return { role: 'user' as const, content: convertUserContent(msg.content) };
       }
     });
   }

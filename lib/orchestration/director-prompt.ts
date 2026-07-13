@@ -10,24 +10,68 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('DirectorPrompt');
 
+export const REQUEST_CLARIFICATION_ACTION_NAME = 'request_clarification' as const;
+export const DEFAULT_VISUAL_CLARIFICATION_MESSAGE =
+  '你画的这部分线条有点密集，我看得不是很确切，你能用语音再补充解释一下这里的连线逻辑吗？';
+
+export const VISION_CONFIDENCE_FALLBACK_PROMPT = `# Vision Hallucination Fallback (CRITICAL)
+When the latest user message includes a whiteboard image, you MUST first assess the image's visual clarity and your understanding confidence as a number from 0 to 1 before deciding how to respond.
+- If the whiteboard snapshot is clear enough and your confidence is >= 0.7, continue normally.
+- If your confidence is < 0.7, do NOT evaluate, grade, correct, or infer hidden intent from the drawing.
+- In that low-confidence case, output exactly one action and no text:
+  [{"type":"action","name":"request_clarification","params":{"visionConfidence":0.0,"reason":"brief reason","message":"${DEFAULT_VISUAL_CLARIFICATION_MESSAGE}"}}]
+- Set visionConfidence to your best estimate. Use a short reason such as "dense overlapping lines", "unclear labels", or "ambiguous connections".
+- This rule overrides normal teaching, debate, and feedback behavior whenever the current visual evidence is ambiguous.`;
+
+export type WhiteboardActionName =
+  | 'wb_draw_text'
+  | 'wb_draw_shape'
+  | 'wb_draw_chart'
+  | 'wb_draw_latex'
+  | 'wb_draw_table'
+  | 'wb_draw_line'
+  | 'wb_clear'
+  | 'wb_delete'
+  | 'wb_open'
+  | 'wb_close';
+
 /**
- * A single whiteboard action performed by an agent, recorded in the ledger.
+ * A single whiteboard action, recorded in the ledger.
+ * Agent fields remain optional-compatible so older session state still replays.
  */
 export interface WhiteboardActionRecord {
-  actionName:
-    | 'wb_draw_text'
-    | 'wb_draw_shape'
-    | 'wb_draw_chart'
-    | 'wb_draw_latex'
-    | 'wb_draw_table'
-    | 'wb_draw_line'
-    | 'wb_clear'
-    | 'wb_delete'
-    | 'wb_open'
-    | 'wb_close';
-  agentId: string;
-  agentName: string;
+  actionName: WhiteboardActionName;
+  actorType?: 'agent' | 'user';
+  agentId?: string;
+  agentName?: string;
+  userId?: string;
+  actorName?: string;
   params: Record<string, unknown>;
+  timestamp?: number;
+  recordId?: string;
+  clientId?: string;
+  roomId?: string;
+}
+
+/**
+ * Compressed whiteboard ledger item.
+ *
+ * Kept as a separate union branch so summarized history is never mistaken for
+ * an executable whiteboard action.
+ */
+export interface WhiteboardLedgerSummaryRecord {
+  type: 'summary';
+  content: string;
+  sourceCount: number;
+  timestamp?: number;
+}
+
+export type WhiteboardLedgerRecord = WhiteboardActionRecord | WhiteboardLedgerSummaryRecord;
+
+export function isWhiteboardLedgerSummary(
+  record: WhiteboardLedgerRecord,
+): record is WhiteboardLedgerSummaryRecord {
+  return (record as { type?: unknown }).type === 'summary';
 }
 
 /**
@@ -39,6 +83,19 @@ export interface AgentTurnSummary {
   contentPreview: string;
   actionCount: number;
   whiteboardActions: WhiteboardActionRecord[];
+}
+
+export interface DiscussionContext {
+  topic: string;
+  prompt?: string;
+  autoEndPolicy?: 'quiz_pass';
+  studentQuestion?: string;
+}
+
+export function getWhiteboardActorName(record: WhiteboardActionRecord): string {
+  if (record.actorName) return record.actorName;
+  if (record.actorType === 'user') return 'Student';
+  return record.agentName || record.agentId || 'Agent';
 }
 
 /**
@@ -54,9 +111,9 @@ export function buildDirectorPrompt(
   conversationSummary: string,
   agentResponses: AgentTurnSummary[],
   turnCount: number,
-  discussionContext?: { topic: string; prompt?: string } | null,
+  discussionContext?: DiscussionContext | null,
   triggerAgentId?: string | null,
-  whiteboardLedger?: WhiteboardActionRecord[],
+  whiteboardLedger?: WhiteboardLedgerRecord[],
   userProfile?: { nickname?: string; bio?: string },
   whiteboardOpen?: boolean,
 ): string {
@@ -76,11 +133,24 @@ export function buildDirectorPrompt(
       : 'None yet.';
 
   const isDiscussion = !!discussionContext;
+  const usesQuizPass = discussionContext?.autoEndPolicy === 'quiz_pass';
 
   const discussionSection = isDiscussion
     ? `\n# Discussion Mode
 Topic: "${discussionContext!.topic}"${discussionContext!.prompt ? `\nPrompt: "${discussionContext!.prompt}"` : ''}${triggerAgentId ? `\nInitiator: "${triggerAgentId}"` : ''}
-This is a student-initiated discussion, not a Q&A session.\n`
+This is a student-initiated discussion, not a Q&A session.${usesQuizPass ? `\nOriginal student question: "${discussionContext!.studentQuestion || discussionContext!.topic}"` : ''}\n`
+    : '';
+
+  const autoEndSection = usesQuizPass
+    ? `
+# Auto-End Policy: Quiz Pass
+- Do NOT output END merely because the explanation is complete.
+- The discussion ends only after the student answers a short understanding-check question correctly.
+- If an agent has just asked an understanding-check question and the student has not answered it yet, output {"next_agent":"USER"}.
+- If the latest user message answers the latest check question and shows correct understanding, output {"next_agent":"END"}.
+- If the latest user answer is wrong, vague, or off-topic, route to the teacher or assistant to correct the misconception and ask one new brief check question.
+- Keep this loop short: explain only the missing point, ask exactly one check question, then cue USER again.
+`
     : '';
 
   const rule1 = isDiscussion
@@ -111,6 +181,7 @@ ${respondedList}
 # Conversation Context
 ${conversationSummary}
 ${discussionSection}${whiteboardSection}${studentProfileSection}
+${autoEndSection}
 # Rules
 ${rule1}
 2. After the teacher, consider whether a student agent would add value (ask a follow-up question, crack a joke, take notes, offer a different perspective).
@@ -200,14 +271,21 @@ function summarizeAgentWhiteboardActions(actions: WhiteboardActionRecord[]): str
 /**
  * Replay the whiteboard ledger to compute current element count and contributors.
  */
-export function summarizeWhiteboardForDirector(ledger: WhiteboardActionRecord[]): {
+export function summarizeWhiteboardForDirector(ledger: WhiteboardLedgerRecord[]): {
   elementCount: number;
   contributors: string[];
+  summaries: string[];
 } {
   let elementCount = 0;
   const contributorSet = new Set<string>();
+  const summaries: string[] = [];
 
   for (const record of ledger) {
+    if (isWhiteboardLedgerSummary(record)) {
+      summaries.push(record.content);
+      continue;
+    }
+
     if (record.actionName === 'wb_clear') {
       elementCount = 0;
       // Don't reset contributors — they still participated
@@ -215,13 +293,14 @@ export function summarizeWhiteboardForDirector(ledger: WhiteboardActionRecord[])
       elementCount = Math.max(0, elementCount - 1);
     } else if (record.actionName.startsWith('wb_draw_')) {
       elementCount++;
-      contributorSet.add(record.agentName);
+      contributorSet.add(getWhiteboardActorName(record));
     }
   }
 
   return {
     elementCount,
     contributors: Array.from(contributorSet),
+    summaries,
   };
 }
 
@@ -229,19 +308,21 @@ export function summarizeWhiteboardForDirector(ledger: WhiteboardActionRecord[])
  * Build the whiteboard state section for the director prompt.
  * Returns empty string if there are no whiteboard actions.
  */
-function buildWhiteboardStateForDirector(ledger?: WhiteboardActionRecord[]): string {
+function buildWhiteboardStateForDirector(ledger?: WhiteboardLedgerRecord[]): string {
   if (!ledger || ledger.length === 0) return '';
 
-  const { elementCount, contributors } = summarizeWhiteboardForDirector(ledger);
+  const { elementCount, contributors, summaries } = summarizeWhiteboardForDirector(ledger);
   const crowdedWarning =
     elementCount > 5
       ? '\n⚠ The whiteboard is getting crowded. Consider routing to an agent that will organize or clear it rather than adding more.'
       : '';
+  const summaryText =
+    summaries.length > 0 ? `\nCompressed earlier whiteboard history:\n${summaries.join('\n')}` : '';
 
   return `
 # Whiteboard State
 Elements on whiteboard: ${elementCount}
-Contributors: ${contributors.length > 0 ? contributors.join(', ') : 'none'}${crowdedWarning}
+Contributors: ${contributors.length > 0 ? contributors.join(', ') : 'none'}${summaryText}${crowdedWarning}
 `;
 }
 

@@ -130,7 +130,13 @@ export async function cleanupSessionImages(sessionId: string): Promise<void> {
 export async function cleanupOldImages(hoursOld: number = 24): Promise<void> {
   try {
     const cutoff = Date.now() - hoursOld * 60 * 60 * 1000;
-    await db.imageFiles.where('createdAt').below(cutoff).delete();
+    const oldFiles = await db.imageFiles.where('createdAt').below(cutoff).toArray();
+    const oldTransientImageIds = oldFiles
+      .filter((file) => !file.id.startsWith('pdf_'))
+      .map((file) => file.id);
+    if (oldTransientImageIds.length > 0) {
+      await db.imageFiles.bulkDelete(oldTransientImageIds);
+    }
     log.info(`Cleaned up images older than ${hoursOld} hours`);
   } catch (error) {
     log.error('Failed to cleanup old images:', error);

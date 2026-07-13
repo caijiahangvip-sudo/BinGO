@@ -2,12 +2,27 @@
 import type { Slide } from '@/lib/types/slides';
 import type { Action } from '@/lib/types/action';
 import type { PBLProjectConfig } from '@/lib/pbl/types';
+import type { PdfImage } from '@/lib/types/generation';
+import type { ColorThemeId } from '@/lib/theme/color-themes';
 
 export type SceneType = 'slide' | 'quiz' | 'interactive' | 'pbl';
 
 export type StageMode = 'autonomous' | 'playback';
 
 export type Whiteboard = Omit<Slide, 'theme' | 'turningMode' | 'sectionTag' | 'type'>;
+
+export interface StageGenerationParams {
+  pdfImages?: PdfImage[];
+  agents?: Array<{
+    id: string;
+    name: string;
+    role: string;
+    persona?: string;
+  }>;
+  userProfile?: string;
+  forceClassroomScenes?: boolean;
+  visualTheme?: ColorThemeId;
+}
 
 /**
  * Stage - Represents the entire classroom/course
@@ -21,10 +36,36 @@ export interface Stage {
   // Stage metadata
   language?: string;
   style?: string;
+  visualTheme?: ColorThemeId;
   // Whiteboard data
   whiteboard?: Whiteboard[];
   // Agent IDs selected when this classroom was created
   agentIds?: string[];
+  // Serializable inputs needed to continue one-page-at-a-time scene generation after refresh.
+  generationParams?: StageGenerationParams;
+  // Optional context when this classroom is generated from a book-learning lesson
+  bookLessonContext?: {
+    planId: string;
+    lessonId: string;
+    lessonOrder: number;
+    knowledgePointIds?: string[];
+    reviewContext?: {
+      lessonOrder: number;
+      sourceLessonId?: string;
+      sourceLessonTitle?: string;
+      knowledgePointIds: string[];
+      knowledgePoints: Array<{
+        id: string;
+        title: string;
+        summary: string;
+        status: string;
+      }>;
+    };
+  };
+  learningContext?: {
+    section: 'review' | 'lesson' | 'practice';
+    knowledgePointIds: string[];
+  };
   /**
    * Server-generated agent configurations.
    * Embedded in persisted classroom JSON so clients can hydrate
@@ -71,6 +112,10 @@ export interface Scene {
   // Metadata
   createdAt?: number;
   updatedAt?: number;
+  learningContext?: {
+    section: 'review' | 'lesson' | 'practice';
+    knowledgePointIds: string[];
+  };
 }
 
 /**
@@ -100,10 +145,23 @@ export interface QuizOption {
   value: string; // Selection key: "A", "B", "C", "D"
 }
 
+export interface QuizDiagram {
+  type: 'intersecting_lines';
+  caption?: string;
+  points?: {
+    upperLeft?: string;
+    upperRight?: string;
+    lowerRight?: string;
+    lowerLeft?: string;
+    center?: string;
+  };
+}
+
 export interface QuizQuestion {
   id: string;
   type: 'single' | 'multiple' | 'short_answer';
   question: string;
+  diagram?: QuizDiagram;
   options?: QuizOption[];
   answer?: string[]; // Correct answer values: ["A"], ["A","C"], or undefined for text
   analysis?: string; // Explanation shown after grading

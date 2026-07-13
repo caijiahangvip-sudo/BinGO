@@ -170,6 +170,7 @@ export function ChatSessionComponent({
   const isQA = session.type === 'qa';
   const canEnd = (isDiscussion || isQA) && session.status === 'active';
   const isEnded = session.status === 'completed' && (isDiscussion || isQA);
+  const visibleMessages = session.messages.filter((message) => !message.metadata?.hidden);
 
   // Track whether user is at the bottom of the scroll container.
   // When user scrolls up to read history, auto-scroll is suppressed.
@@ -181,7 +182,7 @@ export function ChatSessionComponent({
   }, []);
 
   // Auto-scroll: smooth scroll when a NEW message arrives — always (new agent bubble should be visible)
-  const msgCount = session.messages.length;
+  const msgCount = visibleMessages.length;
   useEffect(() => {
     if (bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -211,7 +212,7 @@ export function ChatSessionComponent({
     }
   }, [activeBubbleId]);
 
-  if (session.messages.length === 0 && !isActive) {
+  if (visibleMessages.length === 0 && !isActive) {
     return (
       <div className="h-20 flex items-center justify-center text-center px-2">
         <p className="text-[10px] text-gray-400 dark:text-gray-500">{t('chat.noMessages')}</p>
@@ -230,14 +231,14 @@ export function ChatSessionComponent({
         onScroll={handleScroll}
         className="space-y-1 overflow-y-auto scrollbar-hide"
       >
-        {session.messages.map((message, msgIdx) => {
+        {visibleMessages.map((message, msgIdx) => {
           const isUser = message.metadata?.originalRole === 'user';
           const isTeacher = message.metadata?.originalRole === 'teacher';
           const avatar = isUser
             ? userProfileAvatar || AVATARS.user
             : message.metadata?.senderAvatar || AVATARS.teacher;
           const isActiveBubble = activeBubbleId === message.id;
-          const isLastMessage = msgIdx === session.messages.length - 1;
+          const isLastMessage = msgIdx === visibleMessages.length - 1;
 
           return (
             <motion.div

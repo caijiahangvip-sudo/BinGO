@@ -1,28 +1,23 @@
 /**
  * PDF Provider Constants
- * Separated from pdf-providers.ts to avoid importing sharp in client components
+ * Separated from pdf-providers.ts to avoid importing server-only parser modules
+ * in client components.
  */
 
-import type { PDFProviderId, PDFProviderConfig } from './types';
+import type { BuiltInPDFProviderId, PDFProviderId, PDFProviderConfig } from './types';
 
 /**
  * PDF Provider Registry
  */
-export const PDF_PROVIDERS: Record<PDFProviderId, PDFProviderConfig> = {
-  unpdf: {
-    id: 'unpdf',
-    name: 'unpdf',
+export const PDF_PROVIDERS: Record<BuiltInPDFProviderId, PDFProviderConfig> &
+  Record<string, PDFProviderConfig> = {
+  'mineru-local': {
+    id: 'mineru-local',
+    name: 'MinerU Local',
     requiresApiKey: false,
-    icon: '/logos/unpdf.svg',
-    features: ['text', 'images', 'metadata'],
-  },
-
-  mineru: {
-    id: 'mineru',
-    name: 'MinerU',
-    requiresApiKey: false,
+    baseUrl: 'http://localhost:50002',
     icon: '/logos/mineru.png',
-    features: ['text', 'images', 'tables', 'formulas', 'layout-analysis'],
+    features: ['text', 'images', 'metadata', 'tables', 'formulas', 'layout-analysis', 'ocr'],
   },
 };
 

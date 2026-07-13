@@ -9,12 +9,15 @@ import type { ProviderId } from '@/lib/ai/providers';
 import type { ProvidersConfig } from '@/lib/types/settings';
 import { PROVIDERS } from '@/lib/ai/providers';
 import type { TTSProviderId, ASRProviderId } from '@/lib/audio/types';
-import { ASR_PROVIDERS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from '@/lib/audio/constants';
+import { ASR_PROVIDERS, TTS_PROVIDERS, getDefaultTTSVoice } from '@/lib/audio/constants';
 import { PDF_PROVIDERS } from '@/lib/pdf/constants';
 import type { PDFProviderId } from '@/lib/pdf/types';
-import type { ImageProviderId, VideoProviderId } from '@/lib/media/types';
-import { IMAGE_PROVIDERS } from '@/lib/media/image-providers';
-import { VIDEO_PROVIDERS } from '@/lib/media/video-providers';
+import {
+  LOCAL_BGE_BASE_ZH_MODEL_ID,
+  VECTOR_PROVIDERS,
+  normalizeVectorProviderId,
+} from '@/lib/vector/constants';
+import type { VectorProviderId } from '@/lib/vector/types';
 import { WEB_SEARCH_PROVIDERS } from '@/lib/web-search/constants';
 import type { WebSearchProviderId } from '@/lib/web-search/types';
 import { createLogger } from '@/lib/logger';
@@ -25,14 +28,44 @@ const log = createLogger('Settings');
 /** Available playback speed tiers */
 export const PLAYBACK_SPEEDS = [1, 1.25, 1.5, 2] as const;
 export type PlaybackSpeed = (typeof PLAYBACK_SPEEDS)[number];
+export type AgentGenerationModelProfile = 'lightweight' | 'main';
+
+const LIGHTWEIGHT_EXCLUDED_PROVIDER_IDS = new Set<string>(['anthropic']);
+
+export function isLightweightProviderAllowed(providerId: string): boolean {
+  return !LIGHTWEIGHT_EXCLUDED_PROVIDER_IDS.has(providerId);
+}
+
+export interface ManagedServiceProviderConfig<TCompatibleProviderId extends string = string> {
+  apiKey: string;
+  baseUrl: string;
+  enabled: boolean;
+  modelId?: string;
+  models?: Array<{ id: string; name: string }>;
+  customModels?: Array<{ id: string; name: string }>;
+  providerOptions?: Record<string, unknown>;
+  isServerConfigured?: boolean;
+  serverBaseUrl?: string;
+  name?: string;
+  icon?: string;
+  requiresApiKey?: boolean;
+  defaultBaseUrl?: string;
+  isBuiltIn?: boolean;
+  compatibleProviderId?: TCompatibleProviderId;
+}
 
 export interface SettingsState {
   // Model selection
   providerId: ProviderId;
   modelId: string;
+  lightweightProviderId: ProviderId;
+  lightweightModelId: string;
 
   // Provider configurations (unified JSON storage)
   providersConfig: ProvidersConfig;
+  deletedBuiltInProviderIds: ProviderId[];
+  lightweightProvidersConfig: ProvidersConfig;
+  deletedBuiltInLightweightProviderIds: ProviderId[];
 
   // TTS settings (legacy, kept for backward compatibility)
   ttsModel: string;
@@ -45,92 +78,28 @@ export interface SettingsState {
   asrLanguage: string;
 
   // Audio provider configurations
-  ttsProvidersConfig: Record<
-    TTSProviderId,
-    {
-      apiKey: string;
-      baseUrl: string;
-      enabled: boolean;
-      modelId?: string;
-      customModels?: Array<{ id: string; name: string }>;
-      providerOptions?: Record<string, unknown>;
-      isServerConfigured?: boolean;
-      serverBaseUrl?: string;
-    }
-  >;
+  deletedBuiltInTTSProviderIds: TTSProviderId[];
+  deletedBuiltInASRProviderIds: ASRProviderId[];
+  ttsProvidersConfig: Record<TTSProviderId, ManagedServiceProviderConfig<TTSProviderId>>;
 
-  asrProvidersConfig: Record<
-    ASRProviderId,
-    {
-      apiKey: string;
-      baseUrl: string;
-      enabled: boolean;
-      modelId?: string;
-      customModels?: Array<{ id: string; name: string }>;
-      providerOptions?: Record<string, unknown>;
-      isServerConfigured?: boolean;
-      serverBaseUrl?: string;
-    }
-  >;
+  asrProvidersConfig: Record<ASRProviderId, ManagedServiceProviderConfig<ASRProviderId>>;
 
   // PDF settings
+  deletedBuiltInPDFProviderIds: PDFProviderId[];
   pdfProviderId: PDFProviderId;
-  pdfProvidersConfig: Record<
-    PDFProviderId,
-    {
-      apiKey: string;
-      baseUrl: string;
-      enabled: boolean;
-      isServerConfigured?: boolean;
-      serverBaseUrl?: string;
-    }
-  >;
+  pdfProvidersConfig: Record<PDFProviderId, ManagedServiceProviderConfig<PDFProviderId>>;
 
-  // Image Generation settings
-  imageProviderId: ImageProviderId;
-  imageModelId: string;
-  imageProvidersConfig: Record<
-    ImageProviderId,
-    {
-      apiKey: string;
-      baseUrl: string;
-      enabled: boolean;
-      isServerConfigured?: boolean;
-      serverBaseUrl?: string;
-      customModels?: Array<{ id: string; name: string }>;
-    }
-  >;
-
-  // Video Generation settings
-  videoProviderId: VideoProviderId;
-  videoModelId: string;
-  videoProvidersConfig: Record<
-    VideoProviderId,
-    {
-      apiKey: string;
-      baseUrl: string;
-      enabled: boolean;
-      isServerConfigured?: boolean;
-      serverBaseUrl?: string;
-      customModels?: Array<{ id: string; name: string }>;
-    }
-  >;
-
-  // Media generation toggles
-  imageGenerationEnabled: boolean;
-  videoGenerationEnabled: boolean;
+  // Vector / embedding settings
+  deletedBuiltInVectorProviderIds: VectorProviderId[];
+  vectorProviderId: VectorProviderId;
+  vectorProvidersConfig: Record<VectorProviderId, ManagedServiceProviderConfig<VectorProviderId>>;
 
   // Web Search settings
+  deletedBuiltInWebSearchProviderIds: WebSearchProviderId[];
   webSearchProviderId: WebSearchProviderId;
   webSearchProvidersConfig: Record<
     WebSearchProviderId,
-    {
-      apiKey: string;
-      baseUrl: string;
-      enabled: boolean;
-      isServerConfigured?: boolean;
-      serverBaseUrl?: string;
-    }
+    ManagedServiceProviderConfig<WebSearchProviderId>
   >;
 
   // Global TTS/ASR toggles
@@ -151,6 +120,10 @@ export interface SettingsState {
   maxTurns: string;
   agentMode: 'preset' | 'auto';
   autoAgentCount: number;
+  agentGenerationModelProfile: AgentGenerationModelProfile;
+
+  // Slide generation settings
+  slideLayoutReviewEnabled: boolean;
 
   // Layout preferences (persisted via localStorage)
   sidebarCollapsed: boolean;
@@ -159,8 +132,14 @@ export interface SettingsState {
 
   // Actions
   setModel: (providerId: ProviderId, modelId: string) => void;
+  setLightweightModel: (providerId: ProviderId, modelId: string) => void;
   setProviderConfig: (providerId: ProviderId, config: Partial<ProvidersConfig[ProviderId]>) => void;
   setProvidersConfig: (config: ProvidersConfig) => void;
+  setLightweightProviderConfig: (
+    providerId: ProviderId,
+    config: Partial<ProvidersConfig[ProviderId]>,
+  ) => void;
+  setLightweightProvidersConfig: (config: ProvidersConfig) => void;
   setTtsModel: (model: string) => void;
   setTTSMuted: (muted: boolean) => void;
   setTTSVolume: (volume: number) => void;
@@ -170,6 +149,8 @@ export interface SettingsState {
   setMaxTurns: (turns: string) => void;
   setAgentMode: (mode: 'preset' | 'auto') => void;
   setAutoAgentCount: (count: number) => void;
+  setAgentGenerationModelProfile: (profile: AgentGenerationModelProfile) => void;
+  setSlideLayoutReviewEnabled: (enabled: boolean) => void;
 
   // Layout actions
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -184,26 +165,16 @@ export interface SettingsState {
   setASRLanguage: (language: string) => void;
   setTTSProviderConfig: (
     providerId: TTSProviderId,
-    config: Partial<{
-      apiKey: string;
-      baseUrl: string;
-      enabled: boolean;
-      modelId: string;
-      customModels: Array<{ id: string; name: string }>;
-      providerOptions: Record<string, unknown>;
-    }>,
+    config: Partial<ManagedServiceProviderConfig<TTSProviderId>>,
   ) => void;
+  deleteTTSProvider: (providerId: TTSProviderId) => void;
+  restoreTTSProvider: (providerId: TTSProviderId) => void;
   setASRProviderConfig: (
     providerId: ASRProviderId,
-    config: Partial<{
-      apiKey: string;
-      baseUrl: string;
-      enabled: boolean;
-      modelId: string;
-      customModels: Array<{ id: string; name: string }>;
-      providerOptions: Record<string, unknown>;
-    }>,
+    config: Partial<ManagedServiceProviderConfig<ASRProviderId>>,
   ) => void;
+  deleteASRProvider: (providerId: ASRProviderId) => void;
+  restoreASRProvider: (providerId: ASRProviderId) => void;
   setTTSEnabled: (enabled: boolean) => void;
   setASREnabled: (enabled: boolean) => void;
 
@@ -211,45 +182,28 @@ export interface SettingsState {
   setPDFProvider: (providerId: PDFProviderId) => void;
   setPDFProviderConfig: (
     providerId: PDFProviderId,
-    config: Partial<{ apiKey: string; baseUrl: string; enabled: boolean }>,
+    config: Partial<ManagedServiceProviderConfig<PDFProviderId>>,
   ) => void;
+  deletePDFProvider: (providerId: PDFProviderId) => void;
+  restorePDFProvider: (providerId: PDFProviderId) => void;
 
-  // Image Generation actions
-  setImageProvider: (providerId: ImageProviderId) => void;
-  setImageModelId: (modelId: string) => void;
-  setImageProviderConfig: (
-    providerId: ImageProviderId,
-    config: Partial<{
-      apiKey: string;
-      baseUrl: string;
-      enabled: boolean;
-      customModels: Array<{ id: string; name: string }>;
-    }>,
+  // Vector actions
+  setVectorProvider: (providerId: VectorProviderId) => void;
+  setVectorProviderConfig: (
+    providerId: VectorProviderId,
+    config: Partial<ManagedServiceProviderConfig<VectorProviderId>>,
   ) => void;
-
-  // Video Generation actions
-  setVideoProvider: (providerId: VideoProviderId) => void;
-  setVideoModelId: (modelId: string) => void;
-  setVideoProviderConfig: (
-    providerId: VideoProviderId,
-    config: Partial<{
-      apiKey: string;
-      baseUrl: string;
-      enabled: boolean;
-      customModels: Array<{ id: string; name: string }>;
-    }>,
-  ) => void;
-
-  // Media generation toggle actions
-  setImageGenerationEnabled: (enabled: boolean) => void;
-  setVideoGenerationEnabled: (enabled: boolean) => void;
+  deleteVectorProvider: (providerId: VectorProviderId) => void;
+  restoreVectorProvider: (providerId: VectorProviderId) => void;
 
   // Web Search actions
   setWebSearchProvider: (providerId: WebSearchProviderId) => void;
   setWebSearchProviderConfig: (
     providerId: WebSearchProviderId,
-    config: Partial<{ apiKey: string; baseUrl: string; enabled: boolean }>,
+    config: Partial<ManagedServiceProviderConfig<WebSearchProviderId>>,
   ) => void;
+  deleteWebSearchProvider: (providerId: WebSearchProviderId) => void;
+  restoreWebSearchProvider: (providerId: WebSearchProviderId) => void;
 
   // Server provider actions
   fetchServerProviders: () => Promise<void>;
@@ -275,6 +229,112 @@ const getDefaultProvidersConfig = (): ProvidersConfig => {
   return config;
 };
 
+const getLightweightProvidersConfig = (source?: Partial<ProvidersConfig>): ProvidersConfig => {
+  const config: ProvidersConfig = {} as ProvidersConfig;
+  const sourceConfig = source || getDefaultProvidersConfig();
+
+  Object.entries(sourceConfig).forEach(([pid, providerConfig]) => {
+    if (!isLightweightProviderAllowed(pid) || !providerConfig) return;
+    config[pid as ProviderId] = providerConfig as ProvidersConfig[ProviderId];
+  });
+
+  return config;
+};
+
+const getDefaultLightweightProvidersConfig = (): ProvidersConfig =>
+  getLightweightProvidersConfig(getDefaultProvidersConfig());
+
+function getInitialLightweightProviderId(providerId?: ProviderId): ProviderId {
+  return providerId && isLightweightProviderAllowed(providerId) ? providerId : 'openai';
+}
+
+function getNormalizedDeletedBuiltInProviderIds(value: unknown): ProviderId[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((id): id is ProviderId => typeof id === 'string' && id in PROVIDERS);
+}
+
+function normalizeDeletedBuiltInProviderIds(state: Partial<SettingsState>): void {
+  state.deletedBuiltInProviderIds = getNormalizedDeletedBuiltInProviderIds(
+    (state as { deletedBuiltInProviderIds?: unknown }).deletedBuiltInProviderIds,
+  );
+  state.deletedBuiltInLightweightProviderIds = getNormalizedDeletedBuiltInProviderIds(
+    (state as { deletedBuiltInLightweightProviderIds?: unknown })
+      .deletedBuiltInLightweightProviderIds,
+  );
+}
+
+function getDeletedBuiltInProviderIds(
+  providersConfig: Partial<ProvidersConfig>,
+  existingDeletedIds: ProviderId[] = [],
+): ProviderId[] {
+  const deletedIds = new Set(getNormalizedDeletedBuiltInProviderIds(existingDeletedIds));
+
+  Object.keys(PROVIDERS).forEach((pid) => {
+    const providerId = pid as ProviderId;
+    if (providersConfig[providerId]) {
+      deletedIds.delete(providerId);
+    } else {
+      deletedIds.add(providerId);
+    }
+  });
+
+  return Array.from(deletedIds);
+}
+
+function getNormalizedProviderIds<T extends string>(
+  value: unknown,
+  providerMap: Record<string, unknown>,
+): T[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((id): id is T => typeof id === 'string' && id in providerMap);
+}
+
+function getDeletedBuiltInIds<T extends string>(
+  providersConfig: Partial<Record<T, unknown>>,
+  providerMap: Record<string, unknown>,
+  existingDeletedIds: T[] = [],
+): T[] {
+  const deletedIds = new Set(getNormalizedProviderIds<T>(existingDeletedIds, providerMap));
+
+  Object.keys(providerMap).forEach((pid) => {
+    const providerId = pid as T;
+    if (providersConfig[providerId]) {
+      deletedIds.delete(providerId);
+    } else {
+      deletedIds.add(providerId);
+    }
+  });
+
+  return Array.from(deletedIds);
+}
+
+function normalizeDeletedBuiltInServiceProviderIds(state: Partial<SettingsState>): void {
+  const record = state as Record<string, unknown>;
+  state.deletedBuiltInTTSProviderIds = getNormalizedProviderIds<TTSProviderId>(
+    record.deletedBuiltInTTSProviderIds,
+    TTS_PROVIDERS,
+  );
+  state.deletedBuiltInASRProviderIds = getNormalizedProviderIds<ASRProviderId>(
+    record.deletedBuiltInASRProviderIds,
+    ASR_PROVIDERS,
+  );
+  state.deletedBuiltInPDFProviderIds = getNormalizedProviderIds<PDFProviderId>(
+    record.deletedBuiltInPDFProviderIds,
+    PDF_PROVIDERS,
+  );
+  state.deletedBuiltInVectorProviderIds = getNormalizedProviderIds<VectorProviderId>(
+    record.deletedBuiltInVectorProviderIds,
+    {
+      ...VECTOR_PROVIDERS,
+      'siliconflow-embedding': VECTOR_PROVIDERS.siliconflow,
+    },
+  ).map((id) => normalizeVectorProviderId(id));
+  state.deletedBuiltInWebSearchProviderIds = getNormalizedProviderIds<WebSearchProviderId>(
+    record.deletedBuiltInWebSearchProviderIds,
+    WEB_SEARCH_PROVIDERS,
+  );
+}
+
 // Initialize default audio config
 const getDefaultAudioConfig = () => ({
   ttsProviderId: 'browser-native-tts' as TTSProviderId,
@@ -287,6 +347,12 @@ const getDefaultAudioConfig = () => ({
     'azure-tts': { apiKey: '', baseUrl: '', enabled: false },
     'glm-tts': { apiKey: '', baseUrl: '', enabled: false },
     'qwen-tts': { apiKey: '', baseUrl: '', enabled: false },
+    'cosyvoice-tts': {
+      apiKey: '',
+      baseUrl: '',
+      modelId: 'Fun-CosyVoice3-0.5B-2512_RL',
+      enabled: false,
+    },
     'doubao-tts': { apiKey: '', baseUrl: '', enabled: false },
     'elevenlabs-tts': { apiKey: '', baseUrl: '', enabled: false },
     'minimax-tts': { apiKey: '', baseUrl: '', modelId: 'speech-2.8-hd', enabled: false },
@@ -299,44 +365,106 @@ const getDefaultAudioConfig = () => ({
     'openai-whisper': { apiKey: '', baseUrl: '', enabled: true },
     'browser-native': { apiKey: '', baseUrl: '', enabled: true },
     'qwen-asr': { apiKey: '', baseUrl: '', enabled: false },
+    'sensevoice-asr': {
+      apiKey: '',
+      baseUrl: '',
+      modelId: 'iic/SenseVoiceSmall',
+      enabled: false,
+    },
   } as Record<ASRProviderId, { apiKey: string; baseUrl: string; enabled: boolean }>,
 });
 
 // Initialize default PDF config
 const getDefaultPDFConfig = () => ({
-  pdfProviderId: 'unpdf' as PDFProviderId,
+  pdfProviderId: 'mineru-local' as PDFProviderId,
   pdfProvidersConfig: {
-    unpdf: { apiKey: '', baseUrl: '', enabled: true },
-    mineru: { apiKey: '', baseUrl: '', enabled: false },
+    'mineru-local': {
+      apiKey: '',
+      baseUrl: 'http://localhost:50002',
+      enabled: true,
+    },
   } as Record<PDFProviderId, { apiKey: string; baseUrl: string; enabled: boolean }>,
 });
 
-// Initialize default Image config
-const getDefaultImageConfig = () => ({
-  imageProviderId: 'seedream' as ImageProviderId,
-  imageModelId: 'doubao-seedream-5-0-260128',
-  imageProvidersConfig: {
-    seedream: { apiKey: '', baseUrl: '', enabled: false },
-    'qwen-image': { apiKey: '', baseUrl: '', enabled: false },
-    'nano-banana': { apiKey: '', baseUrl: '', enabled: false },
-    'minimax-image': { apiKey: '', baseUrl: '', enabled: false },
-    'grok-image': { apiKey: '', baseUrl: '', enabled: false },
-  } as Record<ImageProviderId, { apiKey: string; baseUrl: string; enabled: boolean }>,
+// Initialize default Vector config
+const getDefaultVectorConfig = () => ({
+  vectorProviderId: 'siliconflow' as VectorProviderId,
+  vectorProvidersConfig: {
+    'openai-embedding': {
+      apiKey: '',
+      baseUrl: '',
+      modelId: 'text-embedding-3-small',
+      enabled: false,
+    },
+    'qwen-embedding': {
+      apiKey: '',
+      baseUrl: '',
+      modelId: 'text-embedding-v4',
+      enabled: false,
+    },
+    siliconflow: {
+      apiKey: '',
+      baseUrl: 'http://localhost:50003',
+      modelId: LOCAL_BGE_BASE_ZH_MODEL_ID,
+      enabled: true,
+      requiresApiKey: false,
+    },
+  } as Record<
+    VectorProviderId,
+    { apiKey: string; baseUrl: string; modelId?: string; enabled: boolean }
+  >,
 });
 
-// Initialize default Video config
-const getDefaultVideoConfig = () => ({
-  videoProviderId: 'seedance' as VideoProviderId,
-  videoModelId: 'doubao-seedance-1-5-pro-251215',
-  videoProvidersConfig: {
-    seedance: { apiKey: '', baseUrl: '', enabled: false },
-    kling: { apiKey: '', baseUrl: '', enabled: false },
-    veo: { apiKey: '', baseUrl: '', enabled: false },
-    sora: { apiKey: '', baseUrl: '', enabled: false },
-    'minimax-video': { apiKey: '', baseUrl: '', enabled: false },
-    'grok-video': { apiKey: '', baseUrl: '', enabled: false },
-  } as Record<VideoProviderId, { apiKey: string; baseUrl: string; enabled: boolean }>,
-});
+const RETIRED_CHINESE_XINHUA_VECTOR_NAMES = new Set([
+  '本地新华字典向量',
+  'Chinese Xinhua Local Vector',
+  'Chinese Xinhua Local',
+  'Local Chinese Xinhua Vector',
+]);
+
+function scrubRetiredChineseXinhuaVectorBranding(
+  config?: Partial<ManagedServiceProviderConfig<VectorProviderId>>,
+): void {
+  if (!config) return;
+
+  if (config.name && RETIRED_CHINESE_XINHUA_VECTOR_NAMES.has(config.name)) {
+    delete config.name;
+  }
+  if (config.icon === '/logos/bailian.svg') {
+    delete config.icon;
+  }
+}
+
+const RETIRED_MEDIA_GENERATION_KEYS = [
+  'deletedBuiltInImageProviderIds',
+  'imageProviderId',
+  'imageModelId',
+  'imageProvidersConfig',
+  'deletedBuiltInVideoProviderIds',
+  'videoProviderId',
+  'videoModelId',
+  'videoProvidersConfig',
+  'imageGenerationEnabled',
+  'videoGenerationEnabled',
+] as const;
+
+const RETIRED_AUDIO_CAPTURE_KEYS = [
+  '\u0063\u006c\u0061\u0073\u0073\u0072\u006f\u006f\u006d\u0041\u006c\u0077\u0061\u0079\u0073\u004f\u006e\u0041\u0053\u0052\u0045\u006e\u0061\u0062\u006c\u0065\u0064',
+] as const;
+
+function scrubRetiredMediaGenerationSettings(state: object): void {
+  const record = state as Record<string, unknown>;
+  for (const key of RETIRED_MEDIA_GENERATION_KEYS) {
+    delete record[key];
+  }
+}
+
+function scrubRetiredAudioCaptureSettings(state: object): void {
+  const record = state as Record<string, unknown>;
+  for (const key of RETIRED_AUDIO_CAPTURE_KEYS) {
+    delete record[key];
+  }
+}
 
 // Initialize default Web Search config
 const getDefaultWebSearchConfig = () => ({
@@ -346,11 +474,18 @@ const getDefaultWebSearchConfig = () => ({
   } as Record<WebSearchProviderId, { apiKey: string; baseUrl: string; enabled: boolean }>,
 });
 
-/**
- * Check whether a provider ID exists in the given provider registry.
- */
-function hasProviderId(providerMap: Record<string, unknown>, providerId?: string): boolean {
-  return typeof providerId === 'string' && providerId in providerMap;
+function getFirstConfiguredProviderId<T extends string>(
+  config: Partial<Record<T, unknown>> | undefined,
+): T | '' {
+  return (Object.keys(config ?? {})[0] as T | undefined) ?? '';
+}
+
+function getCompatibleProviderId<T extends string>(
+  config: Partial<Record<T, ManagedServiceProviderConfig<T>>> | undefined,
+  providerId: T | undefined,
+): T | undefined {
+  if (!providerId) return undefined;
+  return (config?.[providerId]?.compatibleProviderId || providerId) as T;
 }
 
 /**
@@ -359,34 +494,117 @@ function hasProviderId(providerMap: Record<string, unknown>, providerId?: string
  * Called during both migrate and merge to cover all rehydration paths.
  */
 function ensureValidProviderSelections(state: Partial<SettingsState>): void {
-  const defaultAudioConfig = getDefaultAudioConfig();
-  const defaultPdfConfig = getDefaultPDFConfig();
-  const defaultImageConfig = getDefaultImageConfig();
-  const defaultVideoConfig = getDefaultVideoConfig();
-  const defaultWebSearchConfig = getDefaultWebSearchConfig();
-
-  if (!hasProviderId(PDF_PROVIDERS, state.pdfProviderId)) {
-    state.pdfProviderId = defaultPdfConfig.pdfProviderId;
+  if (state.providerId && !state.providersConfig?.[state.providerId as ProviderId]) {
+    state.providerId = getFirstConfiguredProviderId<ProviderId>(
+      state.providersConfig,
+    ) as ProviderId;
+    state.modelId =
+      state.providerId && state.providersConfig?.[state.providerId as ProviderId]?.models?.[0]
+        ? state.providersConfig[state.providerId as ProviderId].models[0].id
+        : '';
   }
 
-  if (!hasProviderId(WEB_SEARCH_PROVIDERS, state.webSearchProviderId)) {
-    state.webSearchProviderId = defaultWebSearchConfig.webSearchProviderId;
+  if (
+    state.lightweightProviderId &&
+    !state.lightweightProvidersConfig?.[state.lightweightProviderId as ProviderId]
+  ) {
+    state.lightweightProviderId = getFirstConfiguredProviderId<ProviderId>(
+      state.lightweightProvidersConfig,
+    ) as ProviderId;
+    state.lightweightModelId =
+      state.lightweightProviderId &&
+      state.lightweightProvidersConfig?.[state.lightweightProviderId as ProviderId]?.models?.[0]
+        ? state.lightweightProvidersConfig[state.lightweightProviderId as ProviderId].models[0].id
+        : '';
   }
 
-  if (!hasProviderId(IMAGE_PROVIDERS, state.imageProviderId)) {
-    state.imageProviderId = defaultImageConfig.imageProviderId;
+  if (!state.pdfProviderId || !state.pdfProvidersConfig?.[state.pdfProviderId as PDFProviderId]) {
+    state.pdfProviderId = (
+      state.pdfProvidersConfig?.['mineru-local']
+        ? 'mineru-local'
+        : getFirstConfiguredProviderId<PDFProviderId>(state.pdfProvidersConfig)
+    ) as PDFProviderId;
   }
 
-  if (!hasProviderId(VIDEO_PROVIDERS, state.videoProviderId)) {
-    state.videoProviderId = defaultVideoConfig.videoProviderId;
+  if (
+    !state.vectorProviderId ||
+    !state.vectorProvidersConfig?.[state.vectorProviderId as VectorProviderId]
+  ) {
+    state.vectorProviderId = (
+      state.vectorProvidersConfig?.siliconflow
+        ? 'siliconflow'
+        : getFirstConfiguredProviderId<VectorProviderId>(state.vectorProvidersConfig)
+    ) as VectorProviderId;
   }
 
-  if (!hasProviderId(TTS_PROVIDERS, state.ttsProviderId)) {
-    state.ttsProviderId = defaultAudioConfig.ttsProviderId;
+  if (
+    !state.webSearchProviderId ||
+    !state.webSearchProvidersConfig?.[state.webSearchProviderId as WebSearchProviderId]
+  ) {
+    state.webSearchProviderId = getFirstConfiguredProviderId<WebSearchProviderId>(
+      state.webSearchProvidersConfig,
+    ) as WebSearchProviderId;
   }
 
-  if (!hasProviderId(ASR_PROVIDERS, state.asrProviderId)) {
-    state.asrProviderId = defaultAudioConfig.asrProviderId;
+  if (!state.ttsProviderId || !state.ttsProvidersConfig?.[state.ttsProviderId as TTSProviderId]) {
+    state.ttsProviderId = getFirstConfiguredProviderId<TTSProviderId>(
+      state.ttsProvidersConfig,
+    ) as TTSProviderId;
+    const compatibleProviderId = getCompatibleProviderId(
+      state.ttsProvidersConfig,
+      state.ttsProviderId,
+    );
+    state.ttsVoice = compatibleProviderId
+      ? getDefaultTTSVoice(
+          compatibleProviderId,
+          state.ttsProvidersConfig?.[state.ttsProviderId as TTSProviderId]?.modelId ||
+            TTS_PROVIDERS[compatibleProviderId]?.defaultModelId,
+        )
+      : 'default';
+  }
+
+  if (!state.asrProviderId || !state.asrProvidersConfig?.[state.asrProviderId as ASRProviderId]) {
+    state.asrProviderId = getFirstConfiguredProviderId<ASRProviderId>(
+      state.asrProvidersConfig,
+    ) as ASRProviderId;
+    const compatibleProviderId = getCompatibleProviderId(
+      state.asrProvidersConfig,
+      state.asrProviderId,
+    );
+    const supportedLanguages = compatibleProviderId
+      ? ASR_PROVIDERS[compatibleProviderId]?.supportedLanguages || []
+      : [];
+    state.asrLanguage = supportedLanguages.includes(state.asrLanguage || '')
+      ? state.asrLanguage!
+      : supportedLanguages[0] || 'auto';
+  }
+}
+
+function removeUnsupportedLightweightProviders(state: Partial<SettingsState>): void {
+  if (!state.lightweightProvidersConfig) return;
+
+  Object.keys(state.lightweightProvidersConfig).forEach((pid) => {
+    if (!isLightweightProviderAllowed(pid)) {
+      delete state.lightweightProvidersConfig![pid as ProviderId];
+    }
+  });
+
+  state.deletedBuiltInLightweightProviderIds = getNormalizedDeletedBuiltInProviderIds(
+    state.deletedBuiltInLightweightProviderIds,
+  ).filter(isLightweightProviderAllowed);
+
+  if (
+    state.lightweightProviderId &&
+    !state.lightweightProvidersConfig[state.lightweightProviderId as ProviderId]
+  ) {
+    state.lightweightProviderId = getFirstConfiguredProviderId<ProviderId>(
+      state.lightweightProvidersConfig,
+    ) as ProviderId;
+    state.lightweightModelId =
+      state.lightweightProviderId &&
+      state.lightweightProvidersConfig?.[state.lightweightProviderId as ProviderId]?.models?.[0]
+        ? state.lightweightProvidersConfig[state.lightweightProviderId as ProviderId].models[0].id
+        : '';
   }
 }
 
@@ -398,8 +616,12 @@ function ensureValidProviderSelections(state: Partial<SettingsState>): void {
 function ensureBuiltInProviders(state: Partial<SettingsState>): void {
   if (!state.providersConfig) return;
   const defaultConfig = getDefaultProvidersConfig();
+  const deletedBuiltInProviderIds = new Set(
+    getNormalizedDeletedBuiltInProviderIds(state.deletedBuiltInProviderIds),
+  );
   Object.keys(PROVIDERS).forEach((pid) => {
     const providerId = pid as ProviderId;
+    if (deletedBuiltInProviderIds.has(providerId)) return;
     if (!state.providersConfig![providerId]) {
       // New provider: add with defaults
       state.providersConfig![providerId] = defaultConfig[providerId];
@@ -407,15 +629,11 @@ function ensureBuiltInProviders(state: Partial<SettingsState>): void {
       // Existing provider: merge new models & metadata
       const provider = PROVIDERS[providerId];
       const existing = state.providersConfig![providerId];
-
-      const existingModelIds = new Set(existing.models?.map((m) => m.id) || []);
-      const newModels = provider.models.filter((m) => !existingModelIds.has(m.id));
-      const mergedModels =
-        newModels.length > 0 ? [...newModels, ...(existing.models || [])] : existing.models;
+      const hasPersistedModelList = Array.isArray(existing.models);
 
       state.providersConfig![providerId] = {
         ...existing,
-        models: mergedModels,
+        models: hasPersistedModelList ? existing.models : provider.models,
         name: existing.name || provider.name,
         type: existing.type || provider.type,
         defaultBaseUrl: existing.defaultBaseUrl || provider.defaultBaseUrl,
@@ -427,32 +645,203 @@ function ensureBuiltInProviders(state: Partial<SettingsState>): void {
   });
 }
 
-/**
- * Ensure imageProvidersConfig includes all built-in image providers.
- * Called on every rehydrate so newly added image providers appear automatically.
- */
-function ensureBuiltInImageProviders(state: Partial<SettingsState>): void {
-  if (!state.imageProvidersConfig) return;
-  const defaultConfig = getDefaultImageConfig().imageProvidersConfig;
-  Object.keys(IMAGE_PROVIDERS).forEach((pid) => {
-    const providerId = pid as ImageProviderId;
-    if (!state.imageProvidersConfig![providerId]) {
-      state.imageProvidersConfig![providerId] = defaultConfig[providerId];
+function ensureBuiltInLightweightProviders(state: Partial<SettingsState>): void {
+  if (!state.lightweightProvidersConfig) return;
+  removeUnsupportedLightweightProviders(state);
+  const defaultConfig = getDefaultLightweightProvidersConfig();
+  const deletedBuiltInProviderIds = new Set(
+    getNormalizedDeletedBuiltInProviderIds(state.deletedBuiltInLightweightProviderIds),
+  );
+  Object.keys(PROVIDERS).forEach((pid) => {
+    const providerId = pid as ProviderId;
+    if (!isLightweightProviderAllowed(providerId)) return;
+    if (deletedBuiltInProviderIds.has(providerId)) return;
+    if (!state.lightweightProvidersConfig![providerId]) {
+      state.lightweightProvidersConfig![providerId] = defaultConfig[providerId];
+    } else {
+      const provider = PROVIDERS[providerId];
+      const existing = state.lightweightProvidersConfig![providerId];
+      const hasPersistedModelList = Array.isArray(existing.models);
+
+      state.lightweightProvidersConfig![providerId] = {
+        ...existing,
+        models: hasPersistedModelList ? existing.models : provider.models,
+        name: existing.name || provider.name,
+        type: existing.type || provider.type,
+        defaultBaseUrl: existing.defaultBaseUrl || provider.defaultBaseUrl,
+        icon: provider.icon || existing.icon,
+        requiresApiKey: existing.requiresApiKey ?? provider.requiresApiKey,
+        isBuiltIn: existing.isBuiltIn ?? true,
+      };
     }
   });
 }
 
-/**
- * Ensure videoProvidersConfig includes all built-in video providers.
- * Called on every rehydrate so newly added video providers appear automatically.
- */
-function ensureBuiltInVideoProviders(state: Partial<SettingsState>): void {
-  if (!state.videoProvidersConfig) return;
-  const defaultConfig = getDefaultVideoConfig().videoProvidersConfig;
-  Object.keys(VIDEO_PROVIDERS).forEach((pid) => {
-    const providerId = pid as VideoProviderId;
-    if (!state.videoProvidersConfig![providerId]) {
-      state.videoProvidersConfig![providerId] = defaultConfig[providerId];
+function ensureBuiltInAudioProviders(state: Partial<SettingsState>): void {
+  const defaultAudioConfig = getDefaultAudioConfig();
+
+  if (state.ttsProvidersConfig) {
+    const deletedIds = new Set(
+      getNormalizedProviderIds<TTSProviderId>(state.deletedBuiltInTTSProviderIds, TTS_PROVIDERS),
+    );
+    Object.keys(TTS_PROVIDERS).forEach((pid) => {
+      const providerId = pid as TTSProviderId;
+      if (deletedIds.has(providerId)) return;
+      if (!state.ttsProvidersConfig![providerId]) {
+        state.ttsProvidersConfig![providerId] = defaultAudioConfig.ttsProvidersConfig[
+          providerId
+        ] || {
+          apiKey: '',
+          baseUrl: '',
+          enabled: providerId === 'browser-native-tts',
+          modelId: TTS_PROVIDERS[providerId]?.defaultModelId || undefined,
+        };
+      }
+    });
+  }
+
+  if (state.asrProvidersConfig) {
+    delete (state.asrProvidersConfig as Record<string, unknown>)['doubao-asr'];
+    const deletedIds = new Set(
+      getNormalizedProviderIds<ASRProviderId>(state.deletedBuiltInASRProviderIds, ASR_PROVIDERS),
+    );
+    Object.keys(ASR_PROVIDERS).forEach((pid) => {
+      const providerId = pid as ASRProviderId;
+      if (deletedIds.has(providerId)) return;
+      if (!state.asrProvidersConfig![providerId]) {
+        state.asrProvidersConfig![providerId] = defaultAudioConfig.asrProvidersConfig[
+          providerId
+        ] || {
+          apiKey: '',
+          baseUrl: '',
+          enabled: providerId === 'browser-native',
+          modelId: ASR_PROVIDERS[providerId]?.defaultModelId || undefined,
+        };
+      }
+    });
+  }
+}
+
+function ensureBuiltInPDFProviders(state: Partial<SettingsState>): void {
+  const defaultConfig = getDefaultPDFConfig().pdfProvidersConfig;
+  const persistedMinerU = state.pdfProvidersConfig?.['mineru-local'];
+
+  state.pdfProviderId = 'mineru-local' as PDFProviderId;
+  state.deletedBuiltInPDFProviderIds = [];
+  state.pdfProvidersConfig = {
+    'mineru-local': {
+      ...defaultConfig['mineru-local'],
+      ...persistedMinerU,
+      baseUrl: persistedMinerU?.baseUrl || defaultConfig['mineru-local'].baseUrl || '',
+      enabled: true,
+    },
+  } as SettingsState['pdfProvidersConfig'];
+}
+
+function ensureBuiltInVectorProviders(state: Partial<SettingsState>): void {
+  if (!state.vectorProvidersConfig) return;
+  const defaultConfig = getDefaultVectorConfig().vectorProvidersConfig;
+  const record = state.vectorProvidersConfig as Record<
+    string,
+    ManagedServiceProviderConfig<VectorProviderId>
+  >;
+  const oldLocalConfig = record['chinese-xinhua-local'];
+  if (oldLocalConfig) {
+    const {
+      name: _retiredLocalName,
+      icon: _retiredLocalIcon,
+      ...oldLocalConfigWithoutBranding
+    } = oldLocalConfig;
+    record.siliconflow = {
+      ...record.siliconflow,
+      ...oldLocalConfigWithoutBranding,
+      modelId: LOCAL_BGE_BASE_ZH_MODEL_ID,
+      baseUrl: oldLocalConfig.baseUrl || record.siliconflow?.baseUrl || 'http://localhost:50003',
+      requiresApiKey: false,
+      compatibleProviderId: 'siliconflow' as VectorProviderId,
+    };
+    delete record['chinese-xinhua-local'];
+  }
+  const oldSiliconFlowConfig = record['siliconflow-embedding'];
+  if (oldSiliconFlowConfig) {
+    record.siliconflow = {
+      ...oldSiliconFlowConfig,
+      ...record.siliconflow,
+      modelId:
+        record.siliconflow?.modelId || oldSiliconFlowConfig.modelId || LOCAL_BGE_BASE_ZH_MODEL_ID,
+    };
+    delete record['siliconflow-embedding'];
+  }
+  if (
+    state.vectorProviderId === 'siliconflow-embedding' ||
+    state.vectorProviderId === 'chinese-xinhua-local'
+  ) {
+    state.vectorProviderId = 'siliconflow' as VectorProviderId;
+  }
+  const deletedIds = new Set(
+    getNormalizedProviderIds<VectorProviderId>(state.deletedBuiltInVectorProviderIds, {
+      ...VECTOR_PROVIDERS,
+      'siliconflow-embedding': VECTOR_PROVIDERS.siliconflow,
+      'chinese-xinhua-local': VECTOR_PROVIDERS.siliconflow,
+    }).map((id) => normalizeVectorProviderId(id)),
+  );
+  Object.keys(VECTOR_PROVIDERS).forEach((pid) => {
+    const providerId = pid as VectorProviderId;
+    if (deletedIds.has(providerId)) return;
+    if (!state.vectorProvidersConfig![providerId]) {
+      state.vectorProvidersConfig![providerId] = defaultConfig[providerId] || {
+        apiKey: '',
+        baseUrl: '',
+        enabled: providerId === 'siliconflow',
+        modelId: VECTOR_PROVIDERS[providerId]?.defaultModelId || undefined,
+      };
+    }
+  });
+  const siliconflow = state.vectorProvidersConfig.siliconflow;
+  if (siliconflow) {
+    scrubRetiredChineseXinhuaVectorBranding(siliconflow);
+    siliconflow.compatibleProviderId = 'siliconflow' as VectorProviderId;
+    siliconflow.modelId = siliconflow.modelId || LOCAL_BGE_BASE_ZH_MODEL_ID;
+    if (siliconflow.modelId === LOCAL_BGE_BASE_ZH_MODEL_ID) {
+      siliconflow.baseUrl = siliconflow.baseUrl || 'http://localhost:50003';
+      siliconflow.requiresApiKey = false;
+      siliconflow.enabled = true;
+    }
+  }
+}
+
+function normalizeVectorProviderState(
+  state: Pick<
+    SettingsState,
+    'vectorProviderId' | 'vectorProvidersConfig' | 'deletedBuiltInVectorProviderIds'
+  >,
+): Pick<
+  SettingsState,
+  'vectorProviderId' | 'vectorProvidersConfig' | 'deletedBuiltInVectorProviderIds'
+> {
+  const nextState = {
+    vectorProviderId: state.vectorProviderId,
+    vectorProvidersConfig: { ...state.vectorProvidersConfig },
+    deletedBuiltInVectorProviderIds: [...state.deletedBuiltInVectorProviderIds],
+  };
+  ensureBuiltInVectorProviders(nextState);
+  return nextState;
+}
+
+function ensureBuiltInWebSearchProviders(state: Partial<SettingsState>): void {
+  if (!state.webSearchProvidersConfig) return;
+  const defaultConfig = getDefaultWebSearchConfig().webSearchProvidersConfig;
+  const deletedIds = new Set(
+    getNormalizedProviderIds<WebSearchProviderId>(
+      state.deletedBuiltInWebSearchProviderIds,
+      WEB_SEARCH_PROVIDERS,
+    ),
+  );
+  Object.keys(WEB_SEARCH_PROVIDERS).forEach((pid) => {
+    const providerId = pid as WebSearchProviderId;
+    if (deletedIds.has(providerId)) return;
+    if (!state.webSearchProvidersConfig![providerId]) {
+      state.webSearchProvidersConfig![providerId] = defaultConfig[providerId];
     }
   });
 }
@@ -527,25 +916,44 @@ const migrateFromOldStorage = () => {
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
-    (set, get) => {
+    (set) => {
       // Try to migrate from old storage
       const migratedData = migrateFromOldStorage();
       const defaultAudioConfig = getDefaultAudioConfig();
       const defaultPDFConfig = getDefaultPDFConfig();
-      const defaultImageConfig = getDefaultImageConfig();
-      const defaultVideoConfig = getDefaultVideoConfig();
+      const defaultVectorConfig = getDefaultVectorConfig();
       const defaultWebSearchConfig = getDefaultWebSearchConfig();
+      const initialLightweightProviderId = getInitialLightweightProviderId(
+        migratedData?.providerId,
+      );
 
       return {
         // Initial state (use migrated data if available)
         providerId: migratedData?.providerId || 'openai',
         modelId: migratedData?.modelId || '',
+        lightweightProviderId: initialLightweightProviderId,
+        lightweightModelId:
+          initialLightweightProviderId === migratedData?.providerId
+            ? migratedData?.modelId || ''
+            : '',
         providersConfig: migratedData?.providersConfig || getDefaultProvidersConfig(),
+        lightweightProvidersConfig: getLightweightProvidersConfig(migratedData?.providersConfig),
+        deletedBuiltInProviderIds: [],
+        deletedBuiltInLightweightProviderIds: [],
+        deletedBuiltInTTSProviderIds: [],
+        deletedBuiltInASRProviderIds: [],
+        deletedBuiltInPDFProviderIds: [],
+        deletedBuiltInVectorProviderIds: [],
+        deletedBuiltInWebSearchProviderIds: [],
         ttsModel: migratedData?.ttsModel || 'openai-tts',
         selectedAgentIds: migratedData?.selectedAgentIds || ['default-1', 'default-2', 'default-3'],
         maxTurns: migratedData?.maxTurns?.toString() || '10',
-        agentMode: 'auto' as const,
+        agentMode: 'preset' as const,
         autoAgentCount: 3,
+        agentGenerationModelProfile: 'lightweight' as const,
+
+        // Slide generation settings
+        slideLayoutReviewEnabled: false,
 
         // Playback controls
         ttsMuted: false,
@@ -564,15 +972,8 @@ export const useSettingsStore = create<SettingsState>()(
         // PDF settings (use defaults)
         ...defaultPDFConfig,
 
-        // Image settings (use defaults)
-        ...defaultImageConfig,
-
-        // Video settings (use defaults)
-        ...defaultVideoConfig,
-
-        // Media generation toggles (off by default)
-        imageGenerationEnabled: false,
-        videoGenerationEnabled: false,
+        // Vector settings (use defaults)
+        ...defaultVectorConfig,
 
         // Audio feature toggles (on by default)
         ttsEnabled: true,
@@ -585,6 +986,8 @@ export const useSettingsStore = create<SettingsState>()(
 
         // Actions
         setModel: (providerId, modelId) => set({ providerId, modelId }),
+        setLightweightModel: (lightweightProviderId, lightweightModelId) =>
+          set({ lightweightProviderId, lightweightModelId }),
 
         setProviderConfig: (providerId, config) =>
           set((state) => ({
@@ -597,7 +1000,34 @@ export const useSettingsStore = create<SettingsState>()(
             },
           })),
 
-        setProvidersConfig: (config) => set({ providersConfig: config }),
+        setProvidersConfig: (config) =>
+          set((state) => ({
+            providersConfig: config,
+            deletedBuiltInProviderIds: getDeletedBuiltInProviderIds(
+              config,
+              state.deletedBuiltInProviderIds,
+            ),
+          })),
+
+        setLightweightProviderConfig: (providerId, config) =>
+          set((state) => ({
+            lightweightProvidersConfig: {
+              ...state.lightweightProvidersConfig,
+              [providerId]: {
+                ...state.lightweightProvidersConfig[providerId],
+                ...config,
+              },
+            },
+          })),
+
+        setLightweightProvidersConfig: (config) =>
+          set((state) => ({
+            lightweightProvidersConfig: config,
+            deletedBuiltInLightweightProviderIds: getDeletedBuiltInProviderIds(
+              config,
+              state.deletedBuiltInLightweightProviderIds,
+            ),
+          })),
 
         setTtsModel: (model) => set({ ttsModel: model }),
 
@@ -614,6 +1044,10 @@ export const useSettingsStore = create<SettingsState>()(
         setMaxTurns: (turns) => set({ maxTurns: turns }),
         setAgentMode: (mode) => set({ agentMode: mode }),
         setAutoAgentCount: (count) => set({ autoAgentCount: count }),
+        setAgentGenerationModelProfile: (agentGenerationModelProfile) =>
+          set({ agentGenerationModelProfile }),
+        setSlideLayoutReviewEnabled: (slideLayoutReviewEnabled) =>
+          set({ slideLayoutReviewEnabled }),
 
         // Layout actions
         setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
@@ -625,9 +1059,21 @@ export const useSettingsStore = create<SettingsState>()(
           set((state) => {
             // If switching provider, set default voice for that provider
             const shouldUpdateVoice = state.ttsProviderId !== providerId;
+            const compatibleProviderId = getCompatibleProviderId(
+              state.ttsProvidersConfig,
+              providerId,
+            );
             return {
               ttsProviderId: providerId,
-              ...(shouldUpdateVoice && { ttsVoice: DEFAULT_TTS_VOICES[providerId] }),
+              ...(shouldUpdateVoice && {
+                ttsVoice: compatibleProviderId
+                  ? getDefaultTTSVoice(
+                      compatibleProviderId,
+                      state.ttsProvidersConfig[providerId]?.modelId ||
+                        TTS_PROVIDERS[compatibleProviderId]?.defaultModelId,
+                    )
+                  : 'default',
+              }),
             };
           }),
 
@@ -639,7 +1085,13 @@ export const useSettingsStore = create<SettingsState>()(
         // (e.g. browser-native uses BCP-47 "en-US", OpenAI Whisper uses ISO 639-1 "en")
         setASRProvider: (providerId) =>
           set((state) => {
-            const supportedLanguages = ASR_PROVIDERS[providerId]?.supportedLanguages || [];
+            const compatibleProviderId = getCompatibleProviderId(
+              state.asrProvidersConfig,
+              providerId,
+            );
+            const supportedLanguages = compatibleProviderId
+              ? ASR_PROVIDERS[compatibleProviderId]?.supportedLanguages || []
+              : [];
             const isLanguageValid = supportedLanguages.includes(state.asrLanguage);
             return {
               asrProviderId: providerId,
@@ -660,6 +1112,39 @@ export const useSettingsStore = create<SettingsState>()(
             },
           })),
 
+        deleteTTSProvider: (providerId) =>
+          set((state) => {
+            const nextConfig = { ...state.ttsProvidersConfig };
+            delete nextConfig[providerId];
+            return {
+              ttsProvidersConfig: nextConfig as SettingsState['ttsProvidersConfig'],
+              deletedBuiltInTTSProviderIds: getDeletedBuiltInIds(
+                nextConfig,
+                TTS_PROVIDERS,
+                state.deletedBuiltInTTSProviderIds,
+              ),
+            };
+          }),
+
+        restoreTTSProvider: (providerId) =>
+          set((state) => {
+            const defaultConfig = getDefaultAudioConfig().ttsProvidersConfig[providerId] || {
+              apiKey: '',
+              baseUrl: '',
+              enabled: providerId === 'browser-native-tts',
+              modelId: TTS_PROVIDERS[providerId]?.defaultModelId || undefined,
+            };
+            return {
+              ttsProvidersConfig: {
+                ...state.ttsProvidersConfig,
+                [providerId]: defaultConfig,
+              },
+              deletedBuiltInTTSProviderIds: state.deletedBuiltInTTSProviderIds.filter(
+                (id) => id !== providerId,
+              ),
+            };
+          }),
+
         setASRProviderConfig: (providerId, config) =>
           set((state) => ({
             asrProvidersConfig: {
@@ -670,6 +1155,39 @@ export const useSettingsStore = create<SettingsState>()(
               },
             },
           })),
+
+        deleteASRProvider: (providerId) =>
+          set((state) => {
+            const nextConfig = { ...state.asrProvidersConfig };
+            delete nextConfig[providerId];
+            return {
+              asrProvidersConfig: nextConfig as SettingsState['asrProvidersConfig'],
+              deletedBuiltInASRProviderIds: getDeletedBuiltInIds(
+                nextConfig,
+                ASR_PROVIDERS,
+                state.deletedBuiltInASRProviderIds,
+              ),
+            };
+          }),
+
+        restoreASRProvider: (providerId) =>
+          set((state) => {
+            const defaultConfig = getDefaultAudioConfig().asrProvidersConfig[providerId] || {
+              apiKey: '',
+              baseUrl: '',
+              enabled: providerId === 'browser-native',
+              modelId: ASR_PROVIDERS[providerId]?.defaultModelId || undefined,
+            };
+            return {
+              asrProvidersConfig: {
+                ...state.asrProvidersConfig,
+                [providerId]: defaultConfig,
+              },
+              deletedBuiltInASRProviderIds: state.deletedBuiltInASRProviderIds.filter(
+                (id) => id !== providerId,
+              ),
+            };
+          }),
 
         // PDF actions
         setPDFProvider: (providerId) => set({ pdfProviderId: providerId }),
@@ -685,53 +1203,111 @@ export const useSettingsStore = create<SettingsState>()(
             },
           })),
 
-        // Image Generation actions
-        setImageProvider: (providerId) => set({ imageProviderId: providerId }),
-        setImageModelId: (modelId) => set({ imageModelId: modelId }),
+        deletePDFProvider: (providerId) =>
+          set((state) => {
+            const nextConfig: Partial<SettingsState['pdfProvidersConfig']> = {
+              ...state.pdfProvidersConfig,
+            };
+            delete nextConfig[providerId];
+            return {
+              pdfProvidersConfig: nextConfig as SettingsState['pdfProvidersConfig'],
+              deletedBuiltInPDFProviderIds: getDeletedBuiltInIds(
+                nextConfig,
+                PDF_PROVIDERS,
+                state.deletedBuiltInPDFProviderIds,
+              ),
+            };
+          }),
 
-        setImageProviderConfig: (providerId, config) =>
+        restorePDFProvider: (providerId) =>
           set((state) => ({
-            imageProvidersConfig: {
-              ...state.imageProvidersConfig,
-              [providerId]: {
-                ...state.imageProvidersConfig[providerId],
-                ...config,
-              },
+            pdfProvidersConfig: {
+              ...state.pdfProvidersConfig,
+              [providerId]: getDefaultPDFConfig().pdfProvidersConfig[providerId],
             },
+            deletedBuiltInPDFProviderIds: state.deletedBuiltInPDFProviderIds.filter(
+              (id) => id !== providerId,
+            ),
           })),
 
-        // Video Generation actions
-        setVideoProvider: (providerId) => set({ videoProviderId: providerId }),
-        setVideoModelId: (modelId) => set({ videoModelId: modelId }),
+        // Vector actions
+        setVectorProvider: (providerId) =>
+          set((state) =>
+            normalizeVectorProviderState({
+              vectorProviderId: normalizeVectorProviderId(providerId) as VectorProviderId,
+              vectorProvidersConfig: state.vectorProvidersConfig,
+              deletedBuiltInVectorProviderIds: state.deletedBuiltInVectorProviderIds,
+            }),
+          ),
 
-        setVideoProviderConfig: (providerId, config) =>
-          set((state) => ({
-            videoProvidersConfig: {
-              ...state.videoProvidersConfig,
-              [providerId]: {
-                ...state.videoProvidersConfig[providerId],
-                ...config,
+        setVectorProviderConfig: (providerId, config) =>
+          set((state) => {
+            const normalizedProviderId = normalizeVectorProviderId(providerId) as VectorProviderId;
+            return normalizeVectorProviderState({
+              vectorProviderId:
+                state.vectorProviderId === providerId
+                  ? normalizedProviderId
+                  : state.vectorProviderId,
+              vectorProvidersConfig: {
+                ...state.vectorProvidersConfig,
+                [normalizedProviderId]: {
+                  ...state.vectorProvidersConfig[providerId],
+                  ...state.vectorProvidersConfig[normalizedProviderId],
+                  ...config,
+                  compatibleProviderId: normalizedProviderId,
+                },
               },
-            },
-          })),
+              deletedBuiltInVectorProviderIds: state.deletedBuiltInVectorProviderIds,
+            });
+          }),
 
-        // Media generation toggle actions
-        setImageGenerationEnabled: (enabled) => {
-          if (enabled) {
-            const cfg = get().imageProvidersConfig;
-            const hasUsable = Object.values(cfg).some((c) => c.isServerConfigured || c.apiKey);
-            if (!hasUsable) return;
-          }
-          set({ imageGenerationEnabled: enabled });
-        },
-        setVideoGenerationEnabled: (enabled) => {
-          if (enabled) {
-            const cfg = get().videoProvidersConfig;
-            const hasUsable = Object.values(cfg).some((c) => c.isServerConfigured || c.apiKey);
-            if (!hasUsable) return;
-          }
-          set({ videoGenerationEnabled: enabled });
-        },
+        deleteVectorProvider: (providerId) =>
+          set((state) => {
+            const normalizedProviderId = normalizeVectorProviderId(providerId) as VectorProviderId;
+            const nextConfig: Partial<SettingsState['vectorProvidersConfig']> = {
+              ...state.vectorProvidersConfig,
+            };
+            delete nextConfig[providerId];
+            delete nextConfig[normalizedProviderId];
+            const normalizedState = normalizeVectorProviderState({
+              vectorProviderId:
+                state.vectorProviderId === providerId ||
+                state.vectorProviderId === normalizedProviderId
+                  ? ('' as VectorProviderId)
+                  : state.vectorProviderId,
+              vectorProvidersConfig: nextConfig as SettingsState['vectorProvidersConfig'],
+              deletedBuiltInVectorProviderIds: getDeletedBuiltInIds(
+                nextConfig,
+                VECTOR_PROVIDERS,
+                state.deletedBuiltInVectorProviderIds,
+              ),
+            });
+            return normalizedState;
+          }),
+
+        restoreVectorProvider: (providerId) =>
+          set((state) => {
+            const normalizedProviderId = normalizeVectorProviderId(providerId) as VectorProviderId;
+            const defaultConfig = getDefaultVectorConfig().vectorProvidersConfig[
+              normalizedProviderId
+            ] || {
+              apiKey: '',
+              baseUrl: '',
+              enabled: normalizedProviderId === 'siliconflow',
+              modelId: VECTOR_PROVIDERS[normalizedProviderId]?.defaultModelId || undefined,
+            };
+            return normalizeVectorProviderState({
+              vectorProviderId: state.vectorProviderId || normalizedProviderId,
+              vectorProvidersConfig: {
+                ...state.vectorProvidersConfig,
+                [normalizedProviderId]: defaultConfig,
+              },
+              deletedBuiltInVectorProviderIds: state.deletedBuiltInVectorProviderIds.filter(
+                (id) => normalizeVectorProviderId(id) !== normalizedProviderId,
+              ),
+            });
+          }),
+
         setTTSEnabled: (enabled) => set({ ttsEnabled: enabled }),
         setASREnabled: (enabled) => set({ asrEnabled: enabled }),
 
@@ -748,6 +1324,33 @@ export const useSettingsStore = create<SettingsState>()(
             },
           })),
 
+        deleteWebSearchProvider: (providerId) =>
+          set((state) => {
+            const nextConfig: Partial<SettingsState['webSearchProvidersConfig']> = {
+              ...state.webSearchProvidersConfig,
+            };
+            delete nextConfig[providerId];
+            return {
+              webSearchProvidersConfig: nextConfig as SettingsState['webSearchProvidersConfig'],
+              deletedBuiltInWebSearchProviderIds: getDeletedBuiltInIds(
+                nextConfig,
+                WEB_SEARCH_PROVIDERS,
+                state.deletedBuiltInWebSearchProviderIds,
+              ),
+            };
+          }),
+
+        restoreWebSearchProvider: (providerId) =>
+          set((state) => ({
+            webSearchProvidersConfig: {
+              ...state.webSearchProvidersConfig,
+              [providerId]: getDefaultWebSearchConfig().webSearchProvidersConfig[providerId],
+            },
+            deletedBuiltInWebSearchProviderIds: state.deletedBuiltInWebSearchProviderIds.filter(
+              (id) => id !== providerId,
+            ),
+          })),
+
         // Fetch server-configured providers and merge into local state
         fetchServerProviders: async () => {
           try {
@@ -758,8 +1361,7 @@ export const useSettingsStore = create<SettingsState>()(
               tts: Record<string, { baseUrl?: string }>;
               asr: Record<string, { baseUrl?: string }>;
               pdf: Record<string, { baseUrl?: string }>;
-              image: Record<string, { baseUrl?: string }>;
-              video: Record<string, { baseUrl?: string }>;
+              vector?: Record<string, { models?: string[]; baseUrl?: string }>;
               webSearch: Record<string, { baseUrl?: string }>;
             };
 
@@ -789,6 +1391,39 @@ export const useSettingsStore = create<SettingsState>()(
                     : currentModels;
                   newProvidersConfig[key] = {
                     ...newProvidersConfig[key],
+                    isServerConfigured: true,
+                    serverModels: info.models,
+                    serverBaseUrl: info.baseUrl,
+                    models: filteredModels,
+                  };
+                }
+              }
+
+              // Merge lightweight LLM providers separately from advanced LLM providers.
+              const newLightweightProvidersConfig = getLightweightProvidersConfig(
+                state.lightweightProvidersConfig,
+              );
+              for (const pid of Object.keys(newLightweightProvidersConfig)) {
+                const key = pid as ProviderId;
+                if (newLightweightProvidersConfig[key]) {
+                  newLightweightProvidersConfig[key] = {
+                    ...newLightweightProvidersConfig[key],
+                    isServerConfigured: false,
+                    serverModels: undefined,
+                    serverBaseUrl: undefined,
+                  };
+                }
+              }
+              for (const [pid, info] of Object.entries(data.providers)) {
+                if (!isLightweightProviderAllowed(pid)) continue;
+                const key = pid as ProviderId;
+                if (newLightweightProvidersConfig[key]) {
+                  const currentModels = newLightweightProvidersConfig[key].models;
+                  const filteredModels = info.models?.length
+                    ? currentModels.filter((m) => info.models!.includes(m.id))
+                    : currentModels;
+                  newLightweightProvidersConfig[key] = {
+                    ...newLightweightProvidersConfig[key],
                     isServerConfigured: true,
                     serverModels: info.models,
                     serverBaseUrl: info.baseUrl,
@@ -866,55 +1501,78 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
-              // Merge Image providers
-              const newImageConfig = { ...state.imageProvidersConfig };
-              for (const pid of Object.keys(newImageConfig)) {
-                const key = pid as ImageProviderId;
-                if (newImageConfig[key]) {
-                  newImageConfig[key] = {
-                    ...newImageConfig[key],
+              // Merge Web Search config — reset all first, then mark server-configured
+              // Merge Vector providers
+              const newVectorConfig = { ...state.vectorProvidersConfig };
+              const oldLocalVectorConfig = (
+                newVectorConfig as Record<string, ManagedServiceProviderConfig<VectorProviderId>>
+              )['chinese-xinhua-local'];
+              if (oldLocalVectorConfig) {
+                const {
+                  name: _retiredLocalName,
+                  icon: _retiredLocalIcon,
+                  ...oldLocalVectorConfigWithoutBranding
+                } = oldLocalVectorConfig;
+                newVectorConfig.siliconflow = {
+                  ...newVectorConfig.siliconflow,
+                  ...oldLocalVectorConfigWithoutBranding,
+                  modelId: LOCAL_BGE_BASE_ZH_MODEL_ID,
+                  baseUrl:
+                    oldLocalVectorConfig.baseUrl ||
+                    newVectorConfig.siliconflow?.baseUrl ||
+                    'http://localhost:50003',
+                  requiresApiKey: false,
+                  compatibleProviderId: 'siliconflow' as VectorProviderId,
+                };
+                delete (
+                  newVectorConfig as Record<string, ManagedServiceProviderConfig<VectorProviderId>>
+                )['chinese-xinhua-local'];
+              }
+              const oldSiliconFlowConfig = (
+                newVectorConfig as Record<string, ManagedServiceProviderConfig<VectorProviderId>>
+              )['siliconflow-embedding'];
+              if (oldSiliconFlowConfig) {
+                newVectorConfig.siliconflow = {
+                  ...oldSiliconFlowConfig,
+                  ...newVectorConfig.siliconflow,
+                  modelId:
+                    newVectorConfig.siliconflow?.modelId ||
+                    oldSiliconFlowConfig.modelId ||
+                    LOCAL_BGE_BASE_ZH_MODEL_ID,
+                };
+                delete (
+                  newVectorConfig as Record<string, ManagedServiceProviderConfig<VectorProviderId>>
+                )['siliconflow-embedding'];
+              }
+              for (const pid of Object.keys(newVectorConfig)) {
+                const key = pid as VectorProviderId;
+                if (newVectorConfig[key]) {
+                  newVectorConfig[key] = {
+                    ...newVectorConfig[key],
                     isServerConfigured: false,
                     serverBaseUrl: undefined,
                   };
                 }
               }
-              for (const [pid, info] of Object.entries(data.image)) {
-                const key = pid as ImageProviderId;
-                if (newImageConfig[key]) {
-                  newImageConfig[key] = {
-                    ...newImageConfig[key],
-                    isServerConfigured: true,
-                    serverBaseUrl: info.baseUrl,
-                  };
-                }
-              }
-
-              // Merge Video providers
-              const newVideoConfig = { ...state.videoProvidersConfig };
-              for (const pid of Object.keys(newVideoConfig)) {
-                const key = pid as VideoProviderId;
-                if (newVideoConfig[key]) {
-                  newVideoConfig[key] = {
-                    ...newVideoConfig[key],
-                    isServerConfigured: false,
-                    serverBaseUrl: undefined,
-                  };
-                }
-              }
-              if (data.video) {
-                for (const [pid, info] of Object.entries(data.video)) {
-                  const key = pid as VideoProviderId;
-                  if (newVideoConfig[key]) {
-                    newVideoConfig[key] = {
-                      ...newVideoConfig[key],
+              scrubRetiredChineseXinhuaVectorBranding(newVectorConfig.siliconflow);
+              if (data.vector) {
+                for (const [pid, info] of Object.entries(data.vector)) {
+                  const key = normalizeVectorProviderId(
+                    pid as VectorProviderId,
+                  ) as VectorProviderId;
+                  if (newVectorConfig[key]) {
+                    newVectorConfig[key] = {
+                      ...newVectorConfig[key],
                       isServerConfigured: true,
                       serverBaseUrl: info.baseUrl,
+                      ...(info.models?.length
+                        ? { models: info.models.map((id) => ({ id, name: id })) }
+                        : {}),
                     };
                   }
                 }
               }
 
-              // Merge Web Search config — reset all first, then mark server-configured
               const newWebSearchConfig = { ...state.webSearchProvidersConfig };
               for (const key of Object.keys(newWebSearchConfig) as WebSearchProviderId[]) {
                 newWebSearchConfig[key] = {
@@ -939,134 +1597,160 @@ export const useSettingsStore = create<SettingsState>()(
               // === Validate current selections against updated configs ===
               // Build fallback: server-configured first, then client-key-only
               const buildFallback = <T extends string>(
-                config: Record<string, { isServerConfigured?: boolean; apiKey?: string }>,
+                config: Record<
+                  string,
+                  {
+                    isServerConfigured?: boolean;
+                    apiKey?: string;
+                    baseUrl?: string;
+                    serverBaseUrl?: string;
+                  }
+                >,
+                options: { allowBaseUrl?: boolean } = {},
               ): T[] => [
                 ...Object.entries(config)
-                  .filter(([, c]) => c.isServerConfigured)
+                  .filter(
+                    ([, c]) =>
+                      c.isServerConfigured ||
+                      (options.allowBaseUrl && (!!c.baseUrl || !!c.serverBaseUrl)),
+                  )
                   .map(([id]) => id as T),
                 ...Object.entries(config)
-                  .filter(([, c]) => !c.isServerConfigured && !!c.apiKey)
+                  .filter(
+                    ([, c]) =>
+                      !c.isServerConfigured &&
+                      !(options.allowBaseUrl && (!!c.baseUrl || !!c.serverBaseUrl)) &&
+                      !!c.apiKey,
+                  )
                   .map(([id]) => id as T),
               ];
 
               const llmFallback = buildFallback<ProviderId>(newProvidersConfig);
+              const lightweightFallback = buildFallback<ProviderId>(newLightweightProvidersConfig);
               const ttsFallback = buildFallback<TTSProviderId>(newTTSConfig);
               const asrFallback = buildFallback<ASRProviderId>(newASRConfig);
-              const pdfFallback = buildFallback<PDFProviderId>(newPDFConfig);
-              const imageFallback = buildFallback<ImageProviderId>(newImageConfig);
-              const videoFallback = buildFallback<VideoProviderId>(newVideoConfig);
+              const pdfFallback = buildFallback<PDFProviderId>(newPDFConfig, {
+                allowBaseUrl: true,
+              });
+              const vectorFallback = buildFallback<VectorProviderId>(newVectorConfig, {
+                allowBaseUrl: true,
+              });
 
               const validLLMProvider = validateProvider(
                 state.providerId,
                 newProvidersConfig,
                 llmFallback,
               );
+              const currentLightweightProvider = state.lightweightProviderId || state.providerId;
+              const validLightweightProvider = validateProvider(
+                currentLightweightProvider,
+                newLightweightProvidersConfig,
+                lightweightFallback,
+              );
               const validTTSProvider = validateProvider(
                 state.ttsProviderId,
                 newTTSConfig,
                 ttsFallback,
-                'browser-native-tts' as TTSProviderId,
+                newTTSConfig['browser-native-tts']
+                  ? ('browser-native-tts' as TTSProviderId)
+                  : undefined,
               );
               const validASRProvider = validateProvider(
                 state.asrProviderId,
                 newASRConfig,
                 asrFallback,
-                'browser-native' as ASRProviderId,
+                newASRConfig['browser-native'] ? ('browser-native' as ASRProviderId) : undefined,
               );
-              const validPDFProvider = validateProvider(
-                state.pdfProviderId,
-                newPDFConfig,
-                pdfFallback,
-                'unpdf' as PDFProviderId,
-              );
-              let validImageProvider = validateProvider(
-                state.imageProviderId,
-                newImageConfig,
-                imageFallback,
-              );
-              let validVideoProvider = validateProvider(
-                state.videoProviderId,
-                newVideoConfig,
-                videoFallback,
-              );
-
-              // Auto-recover: when provider is empty but server has available ones
-              let recoveredImageModel = '';
-              if (!validImageProvider && imageFallback.length > 0) {
-                validImageProvider = imageFallback[0];
-                const models = IMAGE_PROVIDERS[validImageProvider as ImageProviderId]?.models;
-                if (models?.length) recoveredImageModel = models[0].id;
-              }
-              let recoveredVideoModel = '';
-              if (!validVideoProvider && videoFallback.length > 0) {
-                validVideoProvider = videoFallback[0];
-                const models = VIDEO_PROVIDERS[validVideoProvider as VideoProviderId]?.models;
-                if (models?.length) recoveredVideoModel = models[0].id;
-              }
-
+              const currentPdfConfig = newPDFConfig[state.pdfProviderId as PDFProviderId];
+              const currentPdfUsable =
+                !!currentPdfConfig &&
+                (!!currentPdfConfig.isServerConfigured ||
+                  !!currentPdfConfig.apiKey ||
+                  !!currentPdfConfig.baseUrl ||
+                  !!currentPdfConfig.serverBaseUrl);
+              const validPDFProvider = currentPdfUsable
+                ? state.pdfProviderId
+                : (pdfFallback[0] ??
+                  (newPDFConfig['mineru-local'] ? ('mineru-local' as PDFProviderId) : ''));
+              const currentVectorConfig =
+                newVectorConfig[state.vectorProviderId as VectorProviderId];
+              const currentVectorUsable =
+                !!currentVectorConfig &&
+                (!!currentVectorConfig.isServerConfigured ||
+                  !!currentVectorConfig.apiKey ||
+                  !!currentVectorConfig.baseUrl ||
+                  !!currentVectorConfig.serverBaseUrl ||
+                  currentVectorConfig.requiresApiKey === false);
+              const validVectorProvider = currentVectorUsable
+                ? state.vectorProviderId
+                : (vectorFallback[0] ??
+                  (newVectorConfig.siliconflow ? ('siliconflow' as VectorProviderId) : ''));
               const validLLMModel = validLLMProvider
                 ? validateModel(
                     state.modelId,
                     newProvidersConfig[validLLMProvider as ProviderId]?.models ?? [],
                   )
                 : '';
-              const imageModels =
-                IMAGE_PROVIDERS[validImageProvider as ImageProviderId]?.models ?? [];
-              const validImageModel = validImageProvider
-                ? recoveredImageModel ||
-                  validateModel(state.imageModelId, imageModels) ||
-                  // validateModel('', ...) returns '' — fallback to first model when modelId is empty
-                  imageModels[0]?.id ||
-                  ''
-                : '';
-              const videoModels =
-                VIDEO_PROVIDERS[validVideoProvider as VideoProviderId]?.models ?? [];
-              const validVideoModel = validVideoProvider
-                ? recoveredVideoModel ||
-                  validateModel(state.videoModelId, videoModels) ||
-                  videoModels[0]?.id ||
-                  ''
+              const validLightweightModel = validLightweightProvider
+                ? validateModel(
+                    state.lightweightModelId ||
+                      (validLightweightProvider === validLLMProvider ? validLLMModel : ''),
+                    newLightweightProvidersConfig[validLightweightProvider as ProviderId]?.models ??
+                      [],
+                  )
                 : '';
 
+              const validTTSCompatibleProvider = getCompatibleProviderId(
+                newTTSConfig,
+                validTTSProvider as TTSProviderId,
+              );
               const validTTSVoice =
                 validTTSProvider !== state.ttsProviderId
-                  ? DEFAULT_TTS_VOICES[validTTSProvider as TTSProviderId] || 'default'
+                  ? validTTSCompatibleProvider
+                    ? getDefaultTTSVoice(
+                        validTTSCompatibleProvider,
+                        newTTSConfig[validTTSProvider as TTSProviderId]?.modelId ||
+                          TTS_PROVIDERS[validTTSCompatibleProvider]?.defaultModelId,
+                      )
+                    : 'default'
                   : state.ttsVoice;
-
-              // Auto-disable image/video generation when no provider is usable
-              const shouldDisableImage = !validImageProvider && state.imageGenerationEnabled;
-              const shouldDisableVideo = !validVideoProvider && state.videoGenerationEnabled;
 
               // === Auto-select / auto-enable (only on first run) ===
               let autoTtsProvider: TTSProviderId | undefined;
               let autoTtsVoice: string | undefined;
               let autoAsrProvider: ASRProviderId | undefined;
               let autoPdfProvider: PDFProviderId | undefined;
-              let autoImageProvider: ImageProviderId | undefined;
-              let autoImageModel: string | undefined;
-              let autoVideoProvider: VideoProviderId | undefined;
-              let autoVideoModel: string | undefined;
-              let autoImageEnabled: boolean | undefined;
-              let autoVideoEnabled: boolean | undefined;
+              let autoVectorProvider: VectorProviderId | undefined;
 
               if (!state.autoConfigApplied) {
-                // PDF: unpdf → mineru if server has it
-                if (newPDFConfig.mineru?.isServerConfigured && state.pdfProviderId === 'unpdf') {
-                  autoPdfProvider = 'mineru' as PDFProviderId;
-                }
+                // PDF: select MinerU when the local service is server-configured.
+                const serverPdfIds = (Object.keys(data.pdf) as PDFProviderId[]).filter(
+                  (id) => newPDFConfig[id],
+                );
+                autoPdfProvider = serverPdfIds.includes('mineru-local' as PDFProviderId)
+                  ? ('mineru-local' as PDFProviderId)
+                  : undefined;
 
                 // TTS: select first server provider if current is not server-configured
-                const serverTtsIds = Object.keys(data.tts) as TTSProviderId[];
+                const serverTtsIds = (Object.keys(data.tts) as TTSProviderId[]).filter(
+                  (id) => newTTSConfig[id],
+                );
                 if (
                   serverTtsIds.length > 0 &&
                   !newTTSConfig[state.ttsProviderId]?.isServerConfigured
                 ) {
                   autoTtsProvider = serverTtsIds[0];
-                  autoTtsVoice = DEFAULT_TTS_VOICES[autoTtsProvider] || 'default';
+                  autoTtsVoice = getDefaultTTSVoice(
+                    autoTtsProvider,
+                    newTTSConfig[autoTtsProvider]?.modelId ||
+                      TTS_PROVIDERS[autoTtsProvider]?.defaultModelId,
+                  );
                 }
 
                 // ASR: select first server provider if current is not server-configured
-                const serverAsrIds = Object.keys(data.asr) as ASRProviderId[];
+                const serverAsrIds = (Object.keys(data.asr) as ASRProviderId[]).filter(
+                  (id) => newASRConfig[id],
+                );
                 if (
                   serverAsrIds.length > 0 &&
                   !newASRConfig[state.asrProviderId]?.isServerConfigured
@@ -1074,38 +1758,26 @@ export const useSettingsStore = create<SettingsState>()(
                   autoAsrProvider = serverAsrIds[0];
                 }
 
-                // Image: first server provider
-                const serverImageIds = Object.keys(data.image) as ImageProviderId[];
-                if (
-                  serverImageIds.length > 0 &&
-                  !newImageConfig[state.imageProviderId]?.isServerConfigured
-                ) {
-                  autoImageProvider = serverImageIds[0];
-                  const models = IMAGE_PROVIDERS[autoImageProvider]?.models;
-                  if (models?.length) autoImageModel = models[0].id;
-                }
-                if (serverImageIds.length > 0 && !state.imageGenerationEnabled) {
-                  autoImageEnabled = true;
+                if (autoPdfProvider) {
+                  newPDFConfig[autoPdfProvider] = {
+                    ...newPDFConfig[autoPdfProvider],
+                    enabled: true,
+                  };
                 }
 
-                // Video: first server provider
-                const serverVideoIds = Object.keys(data.video || {}) as VideoProviderId[];
-                if (
-                  serverVideoIds.length > 0 &&
-                  !newVideoConfig[state.videoProviderId]?.isServerConfigured
-                ) {
-                  autoVideoProvider = serverVideoIds[0];
-                  const models = VIDEO_PROVIDERS[autoVideoProvider]?.models;
-                  if (models?.length) autoVideoModel = models[0].id;
-                }
-                if (serverVideoIds.length > 0 && !state.videoGenerationEnabled) {
-                  autoVideoEnabled = true;
-                }
+                const serverVectorIds = (Object.keys(data.vector ?? {}) as VectorProviderId[])
+                  .map((id) => normalizeVectorProviderId(id) as VectorProviderId)
+                  .filter((id) => newVectorConfig[id]);
+                autoVectorProvider = serverVectorIds.includes('siliconflow' as VectorProviderId)
+                  ? ('siliconflow' as VectorProviderId)
+                  : serverVectorIds[0];
               }
 
               // LLM auto-select: only on true first load (no provider selected yet)
               let autoProviderId: ProviderId | undefined;
               let autoModelId: string | undefined;
+              let autoLightweightProviderId: ProviderId | undefined;
+              let autoLightweightModelId: string | undefined;
               if (!state.providerId && !state.modelId) {
                 for (const [pid, cfg] of Object.entries(newProvidersConfig)) {
                   if (cfg.isServerConfigured) {
@@ -1117,6 +1789,10 @@ export const useSettingsStore = create<SettingsState>()(
                     if (modelId) {
                       autoProviderId = pid as ProviderId;
                       autoModelId = modelId;
+                      if (isLightweightProviderAllowed(pid)) {
+                        autoLightweightProviderId = pid as ProviderId;
+                        autoLightweightModelId = modelId;
+                      }
                       break;
                     }
                   }
@@ -1125,11 +1801,11 @@ export const useSettingsStore = create<SettingsState>()(
 
               return {
                 providersConfig: newProvidersConfig,
+                lightweightProvidersConfig: newLightweightProvidersConfig,
                 ttsProvidersConfig: newTTSConfig,
                 asrProvidersConfig: newASRConfig,
                 pdfProvidersConfig: newPDFConfig,
-                imageProvidersConfig: newImageConfig,
-                videoProvidersConfig: newVideoConfig,
+                vectorProvidersConfig: newVectorConfig,
                 webSearchProvidersConfig: newWebSearchConfig,
                 autoConfigApplied: true,
                 // Validated selections
@@ -1137,6 +1813,12 @@ export const useSettingsStore = create<SettingsState>()(
                   providerId: validLLMProvider as ProviderId,
                 }),
                 ...(validLLMModel !== state.modelId && { modelId: validLLMModel }),
+                ...(validLightweightProvider !== state.lightweightProviderId && {
+                  lightweightProviderId: validLightweightProvider as ProviderId,
+                }),
+                ...(validLightweightModel !== state.lightweightModelId && {
+                  lightweightModelId: validLightweightModel,
+                }),
                 ...(validTTSProvider !== state.ttsProviderId && {
                   ttsProviderId: validTTSProvider as TTSProviderId,
                   ttsVoice: validTTSVoice,
@@ -1147,45 +1829,25 @@ export const useSettingsStore = create<SettingsState>()(
                 ...(validPDFProvider !== state.pdfProviderId && {
                   pdfProviderId: validPDFProvider as PDFProviderId,
                 }),
-                ...(validImageProvider !== state.imageProviderId && {
-                  imageProviderId: validImageProvider as ImageProviderId,
+                ...(validVectorProvider !== state.vectorProviderId && {
+                  vectorProviderId: validVectorProvider as VectorProviderId,
                 }),
-                ...(validImageModel !== state.imageModelId && {
-                  imageModelId: validImageModel,
-                }),
-                ...(validVideoProvider !== state.videoProviderId && {
-                  videoProviderId: validVideoProvider as VideoProviderId,
-                }),
-                ...(validVideoModel !== state.videoModelId && {
-                  videoModelId: validVideoModel,
-                }),
-                ...(shouldDisableImage && { imageGenerationEnabled: false }),
-                ...(shouldDisableVideo && { videoGenerationEnabled: false }),
                 // First-run auto-select overrides validation (autoConfigApplied guard).
                 // On first sync, auto-select picks the best provider. On subsequent syncs,
                 // auto* variables stay undefined so only validation spreads take effect.
-                ...(autoPdfProvider && { pdfProviderId: autoPdfProvider }),
                 ...(autoTtsProvider && {
                   ttsProviderId: autoTtsProvider,
                   ttsVoice: autoTtsVoice,
                 }),
                 ...(autoAsrProvider && { asrProviderId: autoAsrProvider }),
-                ...(autoImageProvider && {
-                  imageProviderId: autoImageProvider,
-                }),
-                ...(autoImageModel && { imageModelId: autoImageModel }),
-                ...(autoVideoProvider && {
-                  videoProviderId: autoVideoProvider,
-                }),
-                ...(autoVideoModel && { videoModelId: autoVideoModel }),
-                ...(autoImageEnabled !== undefined && {
-                  imageGenerationEnabled: autoImageEnabled,
-                }),
-                ...(autoVideoEnabled !== undefined && {
-                  videoGenerationEnabled: autoVideoEnabled,
-                }),
+                ...(autoPdfProvider && { pdfProviderId: autoPdfProvider }),
+                ...(autoVectorProvider && { vectorProviderId: autoVectorProvider }),
                 ...(autoProviderId && { providerId: autoProviderId }),
                 ...(autoModelId && { modelId: autoModelId }),
+                ...(autoLightweightProviderId && {
+                  lightweightProviderId: autoLightweightProviderId,
+                }),
+                ...(autoLightweightModelId && { lightweightModelId: autoLightweightModelId }),
               };
             });
           } catch (e) {
@@ -1197,10 +1859,15 @@ export const useSettingsStore = create<SettingsState>()(
     },
     {
       name: 'settings-storage',
-      version: 2,
+      version: 3,
       // Migrate persisted state
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as Partial<SettingsState>;
+        if (state.slideLayoutReviewEnabled === undefined) {
+          state.slideLayoutReviewEnabled = false;
+        }
+        normalizeDeletedBuiltInProviderIds(state);
+        normalizeDeletedBuiltInServiceProviderIds(state);
 
         // v0 → v1: clear hardcoded default model so user must actively select
         if (version === 0) {
@@ -1211,10 +1878,25 @@ export const useSettingsStore = create<SettingsState>()(
 
         // Ensure providersConfig has all built-in providers (also in merge below)
         ensureBuiltInProviders(state);
+        if (!state.lightweightProvidersConfig) {
+          state.lightweightProvidersConfig = state.providersConfig
+            ? getLightweightProvidersConfig(JSON.parse(JSON.stringify(state.providersConfig)))
+            : getDefaultLightweightProvidersConfig();
+        }
+        removeUnsupportedLightweightProviders(state);
+        ensureBuiltInLightweightProviders(state);
 
-        // Ensure image/video configs have all built-in providers
-        ensureBuiltInImageProviders(state);
-        ensureBuiltInVideoProviders(state);
+        // Ensure provider configs have all built-in providers unless the user deleted them
+        ensureBuiltInAudioProviders(state);
+        ensureBuiltInPDFProviders(state);
+        if (!state.vectorProvidersConfig) {
+          const defaultVectorConfig = getDefaultVectorConfig();
+          Object.assign(state, defaultVectorConfig);
+        }
+        ensureBuiltInVectorProviders(state);
+        ensureBuiltInWebSearchProviders(state);
+        scrubRetiredMediaGenerationSettings(state);
+        scrubRetiredAudioCaptureSettings(state);
 
         // Migrate from old ttsModel to new ttsProviderId
         if (state.ttsModel && !state.ttsProviderId) {
@@ -1232,7 +1914,17 @@ export const useSettingsStore = create<SettingsState>()(
         // Add default audio config if missing
         if (!state.ttsProvidersConfig || !state.asrProvidersConfig) {
           const defaultAudioConfig = getDefaultAudioConfig();
-          Object.assign(state, defaultAudioConfig);
+          if (!state.ttsProviderId) state.ttsProviderId = defaultAudioConfig.ttsProviderId;
+          if (!state.ttsVoice) state.ttsVoice = defaultAudioConfig.ttsVoice;
+          if (state.ttsSpeed === undefined) state.ttsSpeed = defaultAudioConfig.ttsSpeed;
+          if (!state.ttsProvidersConfig) {
+            state.ttsProvidersConfig = defaultAudioConfig.ttsProvidersConfig;
+          }
+          if (!state.asrProviderId) state.asrProviderId = defaultAudioConfig.asrProviderId;
+          if (!state.asrLanguage) state.asrLanguage = defaultAudioConfig.asrLanguage;
+          if (!state.asrProvidersConfig) {
+            state.asrProvidersConfig = defaultAudioConfig.asrProvidersConfig;
+          }
         }
 
         // Migrate global ttsModelId to per-provider
@@ -1255,7 +1947,7 @@ export const useSettingsStore = create<SettingsState>()(
         }
         // Migrate MiniMax's model field to modelId
         for (const [, cfg] of Object.entries(
-          (state.ttsProvidersConfig as Record<string, Record<string, unknown>>) || {},
+          (state.ttsProvidersConfig as unknown as Record<string, Record<string, unknown>>) || {},
         )) {
           if (cfg.model && !cfg.modelId) {
             cfg.modelId = cfg.model;
@@ -1269,17 +1961,15 @@ export const useSettingsStore = create<SettingsState>()(
           Object.assign(state, defaultPDFConfig);
         }
 
-        // Add default Image config if missing
-        if (!state.imageProvidersConfig) {
-          const defaultImageConfig = getDefaultImageConfig();
-          Object.assign(state, defaultImageConfig);
+        // Add default Vector config if missing
+        if (!state.vectorProvidersConfig) {
+          const defaultVectorConfig = getDefaultVectorConfig();
+          Object.assign(state, defaultVectorConfig);
         }
+        ensureBuiltInVectorProviders(state);
 
-        // Add default Video config if missing
-        if (!state.videoProvidersConfig) {
-          const defaultVideoConfig = getDefaultVideoConfig();
-          Object.assign(state, defaultVideoConfig);
-        }
+        scrubRetiredMediaGenerationSettings(state);
+        scrubRetiredAudioCaptureSettings(state);
 
         // v1 → v2: Replace deep research with web search
         if (version < 2) {
@@ -1287,12 +1977,10 @@ export const useSettingsStore = create<SettingsState>()(
           delete (state as Record<string, unknown>).deepResearchProvidersConfig;
         }
 
-        // Add default media generation toggles if missing
-        if (state.imageGenerationEnabled === undefined) {
-          state.imageGenerationEnabled = false;
-        }
-        if (state.videoGenerationEnabled === undefined) {
-          state.videoGenerationEnabled = false;
+        // v2 → v3: old builds defaulted every user to auto agent generation,
+        // which made ordinary generation wait on role generation.
+        if (version < 3 && (state as Record<string, unknown>).agentMode === 'auto') {
+          (state as Record<string, unknown>).agentMode = 'preset';
         }
 
         // Add default audio toggles if missing
@@ -1302,10 +1990,18 @@ export const useSettingsStore = create<SettingsState>()(
         if ((state as Record<string, unknown>).asrEnabled === undefined) {
           (state as Record<string, unknown>).asrEnabled = true;
         }
+        delete (state as Record<string, unknown>).generationAuditsEnabled;
 
         // Existing users already have their config set up — mark auto-config as done
         if ((state as Record<string, unknown>).autoConfigApplied === undefined) {
           (state as Record<string, unknown>).autoConfigApplied = true;
+        }
+
+        if (!(state as Record<string, unknown>).lightweightProviderId) {
+          state.lightweightProviderId = state.providerId || ('' as ProviderId);
+        }
+        if (!(state as Record<string, unknown>).lightweightModelId) {
+          state.lightweightModelId = state.modelId || '';
         }
 
         if ((state as Record<string, unknown>).agentMode === undefined) {
@@ -1313,6 +2009,9 @@ export const useSettingsStore = create<SettingsState>()(
         }
         if ((state as Record<string, unknown>).autoAgentCount === undefined) {
           (state as Record<string, unknown>).autoAgentCount = 3;
+        }
+        if ((state as Record<string, unknown>).agentGenerationModelProfile === undefined) {
+          (state as Record<string, unknown>).agentGenerationModelProfile = 'lightweight';
         }
 
         // Migrate Web Search: old flat fields → new provider-based config
@@ -1342,9 +2041,31 @@ export const useSettingsStore = create<SettingsState>()(
       // so newly added providers/models appear without clearing cache.
       merge: (persistedState, currentState) => {
         const merged = { ...currentState, ...(persistedState as object) };
+        normalizeDeletedBuiltInProviderIds(merged as Partial<SettingsState>);
+        normalizeDeletedBuiltInServiceProviderIds(merged as Partial<SettingsState>);
         ensureBuiltInProviders(merged as Partial<SettingsState>);
-        ensureBuiltInImageProviders(merged as Partial<SettingsState>);
-        ensureBuiltInVideoProviders(merged as Partial<SettingsState>);
+        if (!(merged as Partial<SettingsState>).lightweightProvidersConfig) {
+          (merged as Partial<SettingsState>).lightweightProvidersConfig = JSON.parse(
+            JSON.stringify(
+              getLightweightProvidersConfig((merged as Partial<SettingsState>).providersConfig),
+            ),
+          );
+        }
+        removeUnsupportedLightweightProviders(merged as Partial<SettingsState>);
+        ensureBuiltInLightweightProviders(merged as Partial<SettingsState>);
+        ensureBuiltInAudioProviders(merged as Partial<SettingsState>);
+        ensureBuiltInPDFProviders(merged as Partial<SettingsState>);
+        if (!(merged as Partial<SettingsState>).vectorProvidersConfig) {
+          Object.assign(merged, getDefaultVectorConfig());
+        }
+        ensureBuiltInVectorProviders(merged as Partial<SettingsState>);
+        ensureBuiltInWebSearchProviders(merged as Partial<SettingsState>);
+        scrubRetiredMediaGenerationSettings(merged);
+        scrubRetiredAudioCaptureSettings(merged);
+        delete (merged as Record<string, unknown>).generationAuditsEnabled;
+        if ((merged as Record<string, unknown>).agentGenerationModelProfile === undefined) {
+          (merged as Record<string, unknown>).agentGenerationModelProfile = 'lightweight';
+        }
         ensureValidProviderSelections(merged as Partial<SettingsState>);
         return merged as SettingsState;
       },

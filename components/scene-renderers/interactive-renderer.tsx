@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
+import { getEmbeddedAppFontCss } from '@/lib/constants/fonts';
 import type { InteractiveContent } from '@/lib/types/stage';
 
 interface InteractiveRendererProps {
@@ -38,6 +39,7 @@ export function InteractiveRenderer({ content, mode: _mode, sceneId }: Interacti
  */
 function patchHtmlForIframe(html: string): string {
   const iframeCss = `<style data-iframe-patch>
+  ${getEmbeddedAppFontCss()}
   html, body {
     width: 100%;
     height: 100%;

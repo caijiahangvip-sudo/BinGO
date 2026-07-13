@@ -16,6 +16,7 @@ import { parse as parsePartialJson, Allow } from 'partial-json';
 import { jsonrepair } from 'jsonrepair';
 import { createLogger } from '@/lib/logger';
 const log = createLogger('ActionParser');
+const DISABLED_ACTIONS = new Set<ActionType>(['laser']);
 
 /**
  * Strip markdown code fences (```json ... ``` or ``` ... ```) from a response string.
@@ -126,8 +127,17 @@ export function parseActionsFromStructuredOutput(
     actions.splice(discussionIdx + 1);
   }
 
-  // Step 6: Filter out slide-only actions for non-slide scenes (defense in depth)
+  // Step 6: Drop disabled visual effects before scene/action filtering.
   let result = actions;
+  {
+    const before = result.length;
+    result = result.filter((a) => !DISABLED_ACTIONS.has(a.type as ActionType));
+    if (result.length < before) {
+      log.info(`Stripped ${before - result.length} disabled action(s)`);
+    }
+  }
+
+  // Step 7: Filter out slide-only actions for non-slide scenes (defense in depth)
   if (sceneType && sceneType !== 'slide') {
     const before = result.length;
     result = result.filter((a) => !SLIDE_ONLY_ACTIONS.includes(a.type as ActionType));
@@ -136,7 +146,7 @@ export function parseActionsFromStructuredOutput(
     }
   }
 
-  // Step 7: Filter by allowedActions whitelist (defense in depth for role-based isolation)
+  // Step 8: Filter by allowedActions whitelist (defense in depth for role-based isolation)
   // Catches hallucinated actions not in the agent's permitted set, e.g. a student agent
   // mimicking spotlight/laser after seeing teacher actions in chat history.
   if (allowedActions && allowedActions.length > 0) {

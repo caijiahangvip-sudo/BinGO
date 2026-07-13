@@ -5,7 +5,8 @@
 /**
  * Web Search Provider IDs
  */
-export type WebSearchProviderId = 'tavily';
+export type BuiltInWebSearchProviderId = 'tavily';
+export type WebSearchProviderId = BuiltInWebSearchProviderId | (string & {});
 
 /**
  * Web Search Provider Configuration

@@ -1,9 +1,23 @@
 import { create } from 'zustand';
+import type * as Y from 'yjs';
 import { createSelectors } from '@/lib/utils/create-selectors';
 import type { TextAttrs } from '@/lib/prosemirror/utils';
 import { defaultRichTextAttrs } from '@/lib/prosemirror/utils';
 import type { TextFormatPainter, ShapeFormatPainter, CreatingElement } from '@/lib/types/edit';
 import type { PercentageGeometry } from '@/lib/types/action';
+import type { WhiteboardActionName } from '@/lib/orchestration/director-prompt';
+import {
+  destroyCrdtProvider,
+  getActiveCrdtProvider,
+  getCrdtClientId,
+  initializeCrdtProvider,
+  pushWhiteboardLedgerRecord,
+  type DistributedWhiteboardActionRecord,
+} from '@/lib/store/crdt-provider';
+import {
+  DEFAULT_SPOTLIGHT_DIMNESS,
+  normalizeSpotlightDimness,
+} from '@/lib/playback/spotlight-utils';
 
 /**
  * Spotlight options
@@ -30,6 +44,96 @@ export interface HighlightOverlayOptions {
 export interface LaserOptions {
   color?: string; // Laser pointer color, default red
   duration?: number; // Duration (milliseconds)
+}
+
+export interface StudentWhiteboardActionTrace {
+  actionName: WhiteboardActionName;
+  actorType?: 'agent' | 'user';
+  agentId?: string;
+  agentName?: string;
+  userId?: string;
+  actorName?: string;
+  params: Record<string, unknown>;
+  timestamp: number;
+  recordId?: string;
+  clientId?: string;
+  roomId?: string;
+}
+
+export type StudentWhiteboardActionInput = Omit<StudentWhiteboardActionTrace, 'timestamp'> &
+  Partial<Pick<StudentWhiteboardActionTrace, 'timestamp'>>;
+
+export interface CanvasSnapshotOptions {
+  quality?: number;
+}
+
+export type CanvasSnapshotGetter = (options?: CanvasSnapshotOptions) => Promise<string | null>;
+
+const MAX_CANVAS_SNAPSHOT_BYTES = 500 * 1024;
+const CANVAS_SNAPSHOT_START_QUALITY = 0.8;
+const CANVAS_SNAPSHOT_MIN_QUALITY = 0.5;
+const CANVAS_SNAPSHOT_QUALITY_STEP = 0.1;
+const LOCAL_USER_ID = 'local-user';
+
+let crdtLedgerObserver:
+  | ((event: Y.YArrayEvent<DistributedWhiteboardActionRecord>, transaction: Y.Transaction) => void)
+  | null = null;
+let crdtBoundLedgerArray: Y.Array<DistributedWhiteboardActionRecord> | null = null;
+let crdtConsumedCount = 0;
+const crdtConsumedCountByRoom = new Map<string, number>();
+
+function estimateDataUrlBytes(dataUrl: string): number {
+  const base64 = dataUrl.includes(',') ? dataUrl.split(',').pop() || '' : dataUrl;
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+function createLocalWhiteboardRecordId(): string {
+  const cryptoRef = globalThis.crypto;
+  if (cryptoRef && 'randomUUID' in cryptoRef) {
+    return `wb-ledger-${cryptoRef.randomUUID()}`;
+  }
+  return `wb-ledger-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizePendingRecord(
+  record: DistributedWhiteboardActionRecord,
+): StudentWhiteboardActionTrace {
+  return {
+    actionName: record.actionName,
+    actorType: record.actorType,
+    agentId: record.agentId,
+    agentName: record.agentName,
+    userId: record.userId,
+    actorName: record.actorName,
+    params:
+      typeof record.params === 'object' && record.params !== null
+        ? record.params
+        : ({} as Record<string, unknown>),
+    timestamp: record.timestamp,
+    recordId: record.recordId,
+    clientId: record.clientId,
+    roomId: record.roomId,
+  };
+}
+
+function getPendingCrdtActions(
+  ledgerArray: Y.Array<DistributedWhiteboardActionRecord>,
+  roomId: string | null,
+): StudentWhiteboardActionTrace[] {
+  return ledgerArray
+    .toArray()
+    .slice(crdtConsumedCount)
+    .filter((record) => !roomId || !record.roomId || record.roomId === roomId)
+    .map(normalizePendingRecord);
+}
+
+function unobserveCrdtLedger(): void {
+  if (crdtBoundLedgerArray && crdtLedgerObserver) {
+    crdtBoundLedgerArray.unobserve(crdtLedgerObserver);
+  }
+  crdtBoundLedgerArray = null;
+  crdtLedgerObserver = null;
 }
 
 /**
@@ -102,6 +206,15 @@ interface CanvasState {
   // ===== Whiteboard =====
   whiteboardOpen: boolean; // Whether whiteboard is open
   whiteboardClearing: boolean; // Whiteboard clear animation in progress
+  studentTeachingEnabled: boolean; // Whether the student can edit the whiteboard freely
+  studentTeachingPrompt: string | null; // Prompt shown while waiting for teach-back
+  studentTeachingEditCount: number; // Monotonic edit counter for teach-back completion
+  studentWhiteboardActions: StudentWhiteboardActionTrace[]; // User whiteboard trace for director prompts
+  canvasSnapshotGetter: CanvasSnapshotGetter | null; // Whiteboard-only Base64 snapshot exporter
+  crdtRoomId: string | null; // Active distributed whiteboard room
+  crdtConnected: boolean; // Whether this store is bound to a Yjs ledger
+  crdtClientId: string | null; // Stable local CRDT client identifier
+  crdtLedgerLength: number; // Full shared ledger length, including consumed records
 
   // ===== Other =====
   thumbnailsFocus: boolean; // Whether left thumbnail area is focused
@@ -155,6 +268,13 @@ interface CanvasState {
   // ----- Whiteboard -----
   setWhiteboardOpen: (open: boolean) => void;
   setWhiteboardClearing: (clearing: boolean) => void;
+  setStudentTeachingState: (enabled: boolean, prompt?: string | null) => void;
+  bindWhiteboardLedgerToCrdt: (roomId: string) => Promise<void>;
+  unbindWhiteboardLedgerFromCrdt: () => void;
+  recordStudentWhiteboardAction: (action: StudentWhiteboardActionInput) => void;
+  clearStudentWhiteboardActions: () => void;
+  setCanvasSnapshotGetter: (getter: CanvasSnapshotGetter | null) => void;
+  getCanvasSnapshot: () => Promise<string | null>;
 
   // ----- Other -----
   setThumbnailsFocus: (focus: boolean) => void;
@@ -227,6 +347,15 @@ const initialState = {
   // Whiteboard
   whiteboardOpen: false,
   whiteboardClearing: false,
+  studentTeachingEnabled: false,
+  studentTeachingPrompt: null,
+  studentTeachingEditCount: 0,
+  studentWhiteboardActions: [],
+  canvasSnapshotGetter: null,
+  crdtRoomId: null,
+  crdtConnected: false,
+  crdtClientId: null,
+  crdtLedgerLength: 0,
 
   // Other: false,
   editorAreaFocus: false,
@@ -340,6 +469,156 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
 
   setWhiteboardOpen: (open) => set({ whiteboardOpen: open }),
   setWhiteboardClearing: (clearing) => set({ whiteboardClearing: clearing }),
+  setStudentTeachingState: (enabled, prompt = null) =>
+    set({
+      studentTeachingEnabled: enabled,
+      studentTeachingPrompt: enabled ? prompt : null,
+    }),
+  bindWhiteboardLedgerToCrdt: async (roomId) => {
+    try {
+      const previousRoomId = get().crdtRoomId;
+      if (previousRoomId && crdtBoundLedgerArray) {
+        crdtConsumedCountByRoom.set(previousRoomId, crdtConsumedCount);
+      }
+      unobserveCrdtLedger();
+
+      const connection = await initializeCrdtProvider(roomId);
+
+      crdtConsumedCount = crdtConsumedCountByRoom.get(connection.roomId) ?? 0;
+      crdtBoundLedgerArray = connection.ledgerArray;
+      crdtLedgerObserver = () => {
+        if (!crdtBoundLedgerArray) return;
+        const pendingActions = getPendingCrdtActions(crdtBoundLedgerArray, connection.roomId);
+        set((state) => ({
+          studentTeachingEditCount: state.studentTeachingEditCount + 1,
+          studentWhiteboardActions: pendingActions,
+          crdtLedgerLength: crdtBoundLedgerArray?.length ?? pendingActions.length,
+        }));
+      };
+      crdtBoundLedgerArray.observe(crdtLedgerObserver);
+
+      set({
+        crdtRoomId: connection.roomId,
+        crdtConnected: true,
+        crdtClientId: getCrdtClientId(),
+        crdtLedgerLength: connection.ledgerArray.length,
+        studentWhiteboardActions: getPendingCrdtActions(connection.ledgerArray, connection.roomId),
+      });
+    } catch (error) {
+      console.warn('[CanvasStore] Failed to bind whiteboard ledger to CRDT provider:', error);
+      set({
+        crdtRoomId: null,
+        crdtConnected: false,
+        crdtClientId: null,
+      });
+    }
+  },
+  unbindWhiteboardLedgerFromCrdt: () => {
+    const roomId = get().crdtRoomId;
+    if (roomId && crdtBoundLedgerArray) {
+      crdtConsumedCountByRoom.set(roomId, crdtConsumedCount);
+    }
+    const pendingActions = crdtBoundLedgerArray
+      ? getPendingCrdtActions(crdtBoundLedgerArray, roomId)
+      : get().studentWhiteboardActions;
+
+    unobserveCrdtLedger();
+    destroyCrdtProvider();
+    crdtConsumedCount = 0;
+
+    set({
+      crdtRoomId: null,
+      crdtConnected: false,
+      crdtClientId: null,
+      crdtLedgerLength: 0,
+      studentWhiteboardActions: pendingActions,
+    });
+  },
+  recordStudentWhiteboardAction: (action) => {
+    const timestamp = action.timestamp ?? Date.now();
+    const actorType = action.actorType ?? 'user';
+    const activeConnection = getActiveCrdtProvider();
+
+    if (activeConnection) {
+      try {
+        pushWhiteboardLedgerRecord({
+          ...action,
+          actorType,
+          userId: actorType === 'user' ? (action.userId ?? LOCAL_USER_ID) : action.userId,
+          timestamp,
+          params: action.params ?? {},
+        });
+        return;
+      } catch (error) {
+        console.warn('[CanvasStore] Failed to push whiteboard record to CRDT ledger:', error);
+      }
+    }
+
+    set((state) => ({
+      studentTeachingEditCount: state.studentTeachingEditCount + 1,
+      studentWhiteboardActions: [
+        ...state.studentWhiteboardActions,
+        {
+          ...action,
+          actorType,
+          userId: actorType === 'user' ? (action.userId ?? LOCAL_USER_ID) : action.userId,
+          timestamp,
+          recordId: action.recordId ?? createLocalWhiteboardRecordId(),
+          clientId: action.clientId ?? getCrdtClientId(),
+        },
+      ],
+    }));
+  },
+  clearStudentWhiteboardActions: () => {
+    if (get().crdtConnected && crdtBoundLedgerArray) {
+      crdtConsumedCount = crdtBoundLedgerArray.length;
+      const roomId = get().crdtRoomId;
+      if (roomId) {
+        crdtConsumedCountByRoom.set(roomId, crdtConsumedCount);
+      }
+      set({
+        studentWhiteboardActions: [],
+        crdtLedgerLength: crdtBoundLedgerArray.length,
+      });
+      return;
+    }
+
+    set({ studentWhiteboardActions: [] });
+  },
+  setCanvasSnapshotGetter: (getter) => set({ canvasSnapshotGetter: getter }),
+  getCanvasSnapshot: async () => {
+    const getter = get().canvasSnapshotGetter;
+    if (!getter) return null;
+
+    try {
+      let quality = CANVAS_SNAPSHOT_START_QUALITY;
+
+      while (quality >= CANVAS_SNAPSHOT_MIN_QUALITY) {
+        const snapshot = await getter({ quality });
+        if (!snapshot) return null;
+
+        const estimatedBytes = estimateDataUrlBytes(snapshot);
+        if (estimatedBytes <= MAX_CANVAS_SNAPSHOT_BYTES || quality <= CANVAS_SNAPSHOT_MIN_QUALITY) {
+          if (estimatedBytes > MAX_CANVAS_SNAPSHOT_BYTES) {
+            console.warn(
+              `[CanvasStore] Whiteboard snapshot remains above 500KB at minimum quality: ${Math.round(estimatedBytes / 1024)}KB`,
+            );
+          }
+          return snapshot;
+        }
+
+        quality = Math.max(
+          CANVAS_SNAPSHOT_MIN_QUALITY,
+          Number((quality - CANVAS_SNAPSHOT_QUALITY_STEP).toFixed(2)),
+        );
+      }
+
+      return null;
+    } catch (error) {
+      console.warn('[CanvasStore] Failed to export whiteboard snapshot:', error);
+      return null;
+    }
+  },
 
   // ===== Other Actions =====
 
@@ -359,9 +638,9 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
       spotlightMode: 'pixel',
       spotlightOptions: {
         radius: 200,
-        dimness: 0.7,
         transition: 300,
         ...options,
+        dimness: normalizeSpotlightDimness(options.dimness),
       },
       spotlightPercentageGeometry: null,
     });
@@ -373,9 +652,9 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
       spotlightMode: 'percentage',
       spotlightPercentageGeometry: geometry,
       spotlightOptions: {
-        dimness: 0.7,
         transition: 300,
         ...options,
+        dimness: normalizeSpotlightDimness(options.dimness ?? DEFAULT_SPOTLIGHT_DIMNESS),
       },
     });
   },
@@ -464,6 +743,12 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
       // Preserve viewport settings
       viewportSize: get().viewportSize,
       viewportRatio: get().viewportRatio,
+      canvasSnapshotGetter: get().canvasSnapshotGetter,
+      crdtRoomId: get().crdtRoomId,
+      crdtConnected: get().crdtConnected,
+      crdtClientId: get().crdtClientId,
+      crdtLedgerLength: get().crdtLedgerLength,
+      studentWhiteboardActions: get().studentWhiteboardActions,
     });
   },
 }));

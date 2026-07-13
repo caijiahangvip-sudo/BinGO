@@ -1,6 +1,15 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { Scene, SceneType, SceneContent, Whiteboard } from '@/lib/types/stage';
+import type { Stage, Scene, SceneType, SceneContent, Whiteboard } from '@/lib/types/stage';
 import type { Action } from '@/lib/types/action';
+import type { BookLearningPlan, BookPracticeSession } from '@/lib/types/book-learning';
+import type { HomeworkSession } from '@/lib/types/homework';
+import type {
+  StudentLearningProfile,
+  KnowledgeMasteryRecord,
+  LearningEvidenceRecord,
+  LessonSummaryRecord,
+  LearningVoiceRecord,
+} from '@/lib/types/learning-profile';
 import type {
   SessionType,
   SessionStatus,
@@ -48,6 +57,9 @@ export interface StageRecord {
   style?: string;
   currentSceneId?: string;
   agentIds?: string[]; // Agent IDs selected at creation time
+  generationParams?: Stage['generationParams'];
+  bookLessonContext?: Stage['bookLessonContext'];
+  learningContext?: Stage['learningContext'];
 }
 
 /**
@@ -64,6 +76,7 @@ export interface SceneRecord {
   whiteboard?: Whiteboard[]; // Stored as JSON
   createdAt: number;
   updatedAt: number;
+  learningContext?: Scene['learningContext'];
 }
 
 /**
@@ -167,6 +180,18 @@ export interface GeneratedAgentRecord {
   createdAt: number;
 }
 
+/**
+ * BookLearningPlan table - Long-term one-book learning plans
+ */
+export type BookLearningPlanRecord = BookLearningPlan;
+export type BookPracticeSessionRecord = BookPracticeSession;
+export type HomeworkSessionRecord = HomeworkSession;
+export type StudentLearningProfileRecord = StudentLearningProfile;
+export type KnowledgeMasteryRecordRow = KnowledgeMasteryRecord;
+export type LearningEvidenceRecordRow = LearningEvidenceRecord;
+export type LessonSummaryRecordRow = LessonSummaryRecord;
+export type LearningVoiceRecordRow = LearningVoiceRecord;
+
 /** Build the compound primary key for mediaFiles: `${stageId}:${elementId}` */
 export function mediaFileKey(stageId: string, elementId: string): string {
   return `${stageId}:${elementId}`;
@@ -174,8 +199,8 @@ export function mediaFileKey(stageId: string, elementId: string): string {
 
 // ==================== Database Definition ====================
 
-const DATABASE_NAME = 'MAIC-Database';
-const _DATABASE_VERSION = 8;
+export const DATABASE_NAME = 'MAIC-Database';
+export const DATABASE_VERSION = 12;
 
 /**
  * MAIC Database Instance
@@ -192,6 +217,14 @@ class MAICDatabase extends Dexie {
   stageOutlines!: EntityTable<StageOutlinesRecord, 'stageId'>;
   mediaFiles!: EntityTable<MediaFileRecord, 'id'>;
   generatedAgents!: EntityTable<GeneratedAgentRecord, 'id'>;
+  bookLearningPlans!: EntityTable<BookLearningPlanRecord, 'id'>;
+  bookPracticeSessions!: EntityTable<BookPracticeSessionRecord, 'id'>;
+  homeworkSessions!: EntityTable<HomeworkSessionRecord, 'id'>;
+  studentLearningProfiles!: EntityTable<StudentLearningProfileRecord, 'id'>;
+  knowledgeMastery!: EntityTable<KnowledgeMasteryRecordRow, 'id'>;
+  learningEvidence!: EntityTable<LearningEvidenceRecordRow, 'id'>;
+  lessonSummaries!: EntityTable<LessonSummaryRecordRow, 'id'>;
+  learningVoiceRecords!: EntityTable<LearningVoiceRecordRow, 'id'>;
 
   constructor() {
     super(DATABASE_NAME);
@@ -309,6 +342,91 @@ class MAICDatabase extends Dexie {
       mediaFiles: 'id, stageId, [stageId+type]',
       generatedAgents: 'id, stageId',
     });
+
+    // Version 9: Add long-term book learning plans.
+    this.version(9).stores({
+      stages: 'id, updatedAt',
+      scenes: 'id, stageId, order, [stageId+order]',
+      audioFiles: 'id, createdAt',
+      imageFiles: 'id, createdAt',
+      snapshots: '++id',
+      chatSessions: 'id, stageId, [stageId+createdAt]',
+      playbackState: 'stageId',
+      stageOutlines: 'stageId',
+      mediaFiles: 'id, stageId, [stageId+type]',
+      generatedAgents: 'id, stageId',
+      bookLearningPlans: 'id, updatedAt, createdAt',
+    });
+
+    // Version 10: Add local learning profile loop tables.
+    this.version(10).stores({
+      stages: 'id, updatedAt',
+      scenes: 'id, stageId, order, [stageId+order]',
+      audioFiles: 'id, createdAt',
+      imageFiles: 'id, createdAt',
+      snapshots: '++id',
+      chatSessions: 'id, stageId, [stageId+createdAt]',
+      playbackState: 'stageId',
+      stageOutlines: 'stageId',
+      mediaFiles: 'id, stageId, [stageId+type]',
+      generatedAgents: 'id, stageId',
+      bookLearningPlans: 'id, updatedAt, createdAt',
+      studentLearningProfiles: 'id, planId, updatedAt',
+      knowledgeMastery:
+        'id, planId, lessonId, knowledgePointId, updatedAt, [planId+knowledgePointId]',
+      learningEvidence:
+        'id, planId, lessonId, stageId, sourceType, updatedAt, [planId+lessonId], [stageId+sourceType]',
+      lessonSummaries: 'id, planId, lessonId, updatedAt, [planId+lessonId]',
+    });
+
+    // Version 11: Add voice evidence blobs and post-book practice sessions.
+    this.version(11).stores({
+      stages: 'id, updatedAt',
+      scenes: 'id, stageId, order, [stageId+order]',
+      audioFiles: 'id, createdAt',
+      imageFiles: 'id, createdAt',
+      snapshots: '++id',
+      chatSessions: 'id, stageId, [stageId+createdAt]',
+      playbackState: 'stageId',
+      stageOutlines: 'stageId',
+      mediaFiles: 'id, stageId, [stageId+type]',
+      generatedAgents: 'id, stageId',
+      bookLearningPlans: 'id, updatedAt, createdAt',
+      bookPracticeSessions: 'id, planId, studentId, status, updatedAt, [planId+updatedAt]',
+      studentLearningProfiles: 'id, planId, updatedAt',
+      knowledgeMastery:
+        'id, planId, lessonId, knowledgePointId, updatedAt, [planId+knowledgePointId]',
+      learningEvidence:
+        'id, planId, lessonId, stageId, sourceType, updatedAt, [planId+lessonId], [stageId+sourceType]',
+      lessonSummaries: 'id, planId, lessonId, updatedAt, [planId+lessonId]',
+      learningVoiceRecords:
+        'id, planId, lessonId, stageId, createdAt, [planId+createdAt], [stageId+createdAt]',
+    });
+
+    // Version 12: Add homework companion sessions.
+    this.version(DATABASE_VERSION).stores({
+      stages: 'id, updatedAt',
+      scenes: 'id, stageId, order, [stageId+order]',
+      audioFiles: 'id, createdAt',
+      imageFiles: 'id, createdAt',
+      snapshots: '++id',
+      chatSessions: 'id, stageId, [stageId+createdAt]',
+      playbackState: 'stageId',
+      stageOutlines: 'stageId',
+      mediaFiles: 'id, stageId, [stageId+type]',
+      generatedAgents: 'id, stageId',
+      bookLearningPlans: 'id, updatedAt, createdAt',
+      bookPracticeSessions: 'id, planId, studentId, status, updatedAt, [planId+updatedAt]',
+      homeworkSessions: 'id, studentId, status, updatedAt, [studentId+updatedAt]',
+      studentLearningProfiles: 'id, planId, updatedAt',
+      knowledgeMastery:
+        'id, planId, lessonId, knowledgePointId, updatedAt, [planId+knowledgePointId]',
+      learningEvidence:
+        'id, planId, lessonId, stageId, sourceType, updatedAt, [planId+lessonId], [stageId+sourceType]',
+      lessonSummaries: 'id, planId, lessonId, updatedAt, [planId+lessonId]',
+      learningVoiceRecords:
+        'id, planId, lessonId, stageId, createdAt, [planId+createdAt], [stageId+createdAt]',
+    });
   }
 }
 
@@ -405,6 +523,8 @@ export async function deleteStageWithRelatedData(stageId: string): Promise<void>
       db.stageOutlines,
       db.mediaFiles,
       db.generatedAgents,
+      db.learningEvidence,
+      db.learningVoiceRecords,
     ],
     async () => {
       await db.stages.delete(stageId);
@@ -414,6 +534,8 @@ export async function deleteStageWithRelatedData(stageId: string): Promise<void>
       await db.stageOutlines.delete(stageId);
       await db.mediaFiles.where('stageId').equals(stageId).delete();
       await db.generatedAgents.where('stageId').equals(stageId).delete();
+      await db.learningEvidence.where('stageId').equals(stageId).delete();
+      await db.learningVoiceRecords.where('stageId').equals(stageId).delete();
     },
   );
 }
@@ -442,5 +564,13 @@ export async function getDatabaseStats() {
     stageOutlines: await db.stageOutlines.count(),
     mediaFiles: await db.mediaFiles.count(),
     generatedAgents: await db.generatedAgents.count(),
+    bookLearningPlans: await db.bookLearningPlans.count(),
+    bookPracticeSessions: await db.bookPracticeSessions.count(),
+    homeworkSessions: await db.homeworkSessions.count(),
+    studentLearningProfiles: await db.studentLearningProfiles.count(),
+    knowledgeMastery: await db.knowledgeMastery.count(),
+    learningEvidence: await db.learningEvidence.count(),
+    lessonSummaries: await db.lessonSummaries.count(),
+    learningVoiceRecords: await db.learningVoiceRecords.count(),
   };
 }

@@ -11,11 +11,17 @@
 
 import type { StageStore } from '@/lib/api/stage-api';
 import { createStageAPI } from '@/lib/api/stage-api';
+import { getPresentationPalette } from '@/lib/theme/color-themes';
 import { useCanvasStore } from '@/lib/store/canvas';
+import { pushWhiteboardLedgerRecord } from '@/lib/store/crdt-provider';
 import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { useMediaGenerationStore, isMediaPlaceholder } from '@/lib/store/media-generation';
-import { getClientTranslation } from '@/lib/i18n';
+import { normalizeSpotlightDimness } from '@/lib/playback/spotlight-utils';
 import type { AudioPlayer } from '@/lib/utils/audio-player';
+import { DEFAULT_REQUEST_CLARIFICATION_MESSAGE } from '@/lib/types/action';
+import type {
+  WhiteboardActionName,
+} from '@/lib/orchestration/director-prompt';
 import type {
   Action,
   SpotlightAction,
@@ -29,11 +35,19 @@ import type {
   WbDrawTableAction,
   WbDeleteAction,
   WbDrawLineAction,
+  WaitForUserTeachingAction,
+  RequestClarificationAction,
 } from '@/lib/types/action';
+import type { ChatSession } from '@/lib/types/chat';
 import katex from 'katex';
 import { createLogger } from '@/lib/logger';
+import { DEFAULT_SCREEN_FONT_NAME } from '@/lib/constants/fonts';
+import { repairMathLatex } from '@/lib/utils/math-display-repair';
 
 const log = createLogger('ActionEngine');
+const DEFAULT_USER_TEACHING_PROMPT = '请在白板上画出你的思路，并发送你的讲解。';
+const DEBATE_AGENT_A_X_RANGE = { min: 60, max: 430 };
+const DEBATE_AGENT_B_X_RANGE = { min: 560, max: 920 };
 
 // ==================== SVG Paths for Shapes ====================
 
@@ -49,21 +63,58 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+type RuntimeActionMetadata = {
+  name?: string;
+  agentId?: string;
+  agentName?: string;
+  params?: Record<string, unknown>;
+};
+
+type ActiveDebateSide = 'agent_a' | 'agent_b';
+const CRDT_WHITEBOARD_ACTION_NAMES = new Set<WhiteboardActionName>([
+  'wb_draw_text',
+  'wb_draw_shape',
+  'wb_draw_chart',
+  'wb_draw_latex',
+  'wb_draw_table',
+  'wb_draw_line',
+  'wb_clear',
+  'wb_delete',
+]);
+
+function isCrdtWhiteboardActionName(actionType: string): actionType is WhiteboardActionName {
+  return CRDT_WHITEBOARD_ACTION_NAMES.has(actionType as WhiteboardActionName);
+}
+
 // ==================== ActionEngine ====================
 
 /** Default duration (ms) before fire-and-forget effects auto-clear */
 const EFFECT_AUTO_CLEAR_MS = 5000;
 
+export interface ActionEngineOptions {
+  onWaitForUserTeaching?: (action: WaitForUserTeachingAction) => Promise<void> | void;
+}
+
 export class ActionEngine {
   private stageStore: StageStore;
   private stageAPI: ReturnType<typeof createStageAPI>;
   private audioPlayer: AudioPlayer | null;
+  private options: ActionEngineOptions;
   private effectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(stageStore: StageStore, audioPlayer?: AudioPlayer) {
+  constructor(
+    stageStore: StageStore,
+    audioPlayer?: AudioPlayer,
+    options: ActionEngineOptions = {},
+  ) {
     this.stageStore = stageStore;
     this.stageAPI = createStageAPI(stageStore);
     this.audioPlayer = audioPlayer ?? null;
+    this.options = options;
   }
 
   /** Clean up timers when the engine is no longer needed */
@@ -80,6 +131,8 @@ export class ActionEngine {
    * Synchronous actions return a Promise that resolves when the action is complete.
    */
   async execute(action: Action): Promise<void> {
+    this.validateAction(action);
+
     // Auto-open whiteboard if a draw/clear/delete action is attempted while it's closed
     if (action.type.startsWith('wb_') && action.type !== 'wb_open' && action.type !== 'wb_close') {
       await this.ensureWhiteboardOpen();
@@ -103,26 +156,46 @@ export class ActionEngine {
       case 'wb_open':
         return this.executeWbOpen();
       case 'wb_draw_text':
-        return this.executeWbDrawText(action);
+        await this.executeWbDrawText(action);
+        this.recordWhiteboardActionToCrdt(action);
+        return;
       case 'wb_draw_shape':
-        return this.executeWbDrawShape(action);
+        await this.executeWbDrawShape(action);
+        this.recordWhiteboardActionToCrdt(action);
+        return;
       case 'wb_draw_chart':
-        return this.executeWbDrawChart(action);
+        await this.executeWbDrawChart(action);
+        this.recordWhiteboardActionToCrdt(action);
+        return;
       case 'wb_draw_latex':
-        return this.executeWbDrawLatex(action);
+        await this.executeWbDrawLatex(action);
+        this.recordWhiteboardActionToCrdt(action);
+        return;
       case 'wb_draw_table':
-        return this.executeWbDrawTable(action);
+        await this.executeWbDrawTable(action);
+        this.recordWhiteboardActionToCrdt(action);
+        return;
       case 'wb_draw_line':
-        return this.executeWbDrawLine(action as WbDrawLineAction);
+        await this.executeWbDrawLine(action as WbDrawLineAction);
+        this.recordWhiteboardActionToCrdt(action);
+        return;
       case 'wb_clear':
-        return this.executeWbClear();
+        await this.executeWbClear();
+        this.recordWhiteboardActionToCrdt(action);
+        return;
       case 'wb_delete':
-        return this.executeWbDelete(action as WbDeleteAction);
+        await this.executeWbDelete(action as WbDeleteAction);
+        this.recordWhiteboardActionToCrdt(action);
+        return;
       case 'wb_close':
         return this.executeWbClose();
       case 'discussion':
         // Discussion lifecycle is managed externally via engine callbacks
         return;
+      case 'wait_for_user_teaching':
+        return this.executeWaitForUserTeaching(action);
+      case 'request_clarification':
+        return this.executeRequestClarification(action);
     }
   }
 
@@ -133,6 +206,115 @@ export class ActionEngine {
       this.effectTimer = null;
     }
     useCanvasStore.getState().clearAllEffects();
+  }
+
+  /** Validate and normalize actions before any execution side effects. */
+  private validateAction(action: Action): void {
+    const runtimeAction = action as Action & RuntimeActionMetadata;
+    const actionRecord = action as unknown as Record<string, unknown>;
+    const actionName =
+      typeof actionRecord.type === 'string'
+        ? actionRecord.type
+        : typeof actionRecord.name === 'string'
+          ? actionRecord.name
+          : null;
+    if (actionName !== 'wb_draw_text') return;
+
+    const debateSide = this.getActiveDebateSide(runtimeAction.agentId);
+    if (!debateSide) return;
+
+    const flattenedX = (action as Partial<WbDrawTextAction>).x;
+    const paramX = runtimeAction.params?.x;
+    const currentX =
+      typeof flattenedX === 'number' ? flattenedX : typeof paramX === 'number' ? paramX : null;
+    if (currentX === null || !Number.isFinite(currentX)) return;
+
+    const range = debateSide === 'agent_a' ? DEBATE_AGENT_A_X_RANGE : DEBATE_AGENT_B_X_RANGE;
+    const clampedX = clamp(currentX, range.min, range.max);
+    if (clampedX === currentX) return;
+
+    (action as WbDrawTextAction).x = clampedX;
+    if (runtimeAction.params) {
+      runtimeAction.params.x = clampedX;
+    }
+
+    log.warn(
+      `[ActionValidator] Clamped debate wb_draw_text x from ${currentX} to ${clampedX} for ${debateSide}`,
+    );
+  }
+
+  private getActiveDebateSide(agentId?: string): ActiveDebateSide | null {
+    const state = this.stageStore.getState() as ReturnType<StageStore['getState']> & {
+      chats?: ChatSession[];
+    };
+    const activeDebateSession = state.chats?.find(
+      (session) =>
+        session.type === 'discussion' &&
+        session.status === 'active' &&
+        session.config.discussionMode === 'debate' &&
+        !!session.config.debateConfig,
+    );
+    const debateConfig = activeDebateSession?.config.debateConfig;
+    if (!activeDebateSession || !debateConfig) return null;
+
+    const debateState = activeDebateSession.directorState?.debateState;
+    const agentAId = debateState?.agentAId ?? debateConfig.agentAId;
+    const agentBId = debateState?.agentBId ?? debateConfig.agentBId;
+
+    if (agentId) {
+      if (agentId === agentAId) return 'agent_a';
+      if (agentId === agentBId) return 'agent_b';
+      return null;
+    }
+
+    if (debateState?.phase === 'agent_a' || debateState?.phase === 'agent_b') {
+      return debateState.phase;
+    }
+
+    return null;
+  }
+
+  private recordWhiteboardActionToCrdt(action: Action): void {
+    const canvasState = useCanvasStore.getState();
+    if (!canvasState.crdtConnected) return;
+    if (!isCrdtWhiteboardActionName(action.type)) return;
+
+    const runtimeAction = action as Action & RuntimeActionMetadata;
+    const params = runtimeAction.params ?? this.extractWhiteboardActionParams(action);
+
+    try {
+      pushWhiteboardLedgerRecord({
+        actionName: action.type,
+        actorType: 'agent',
+        agentId: runtimeAction.agentId,
+        agentName: runtimeAction.agentName ?? runtimeAction.agentId,
+        params,
+      });
+    } catch (error) {
+      log.warn('[CRDT] Failed to record agent whiteboard action:', error);
+    }
+  }
+
+  private extractWhiteboardActionParams(action: Action): Record<string, unknown> {
+    const record = action as unknown as Record<string, unknown>;
+    const params: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(record)) {
+      if (
+        key === 'id' ||
+        key === 'type' ||
+        key === 'title' ||
+        key === 'description' ||
+        key === 'params' ||
+        key === 'agentId' ||
+        key === 'agentName'
+      ) {
+        continue;
+      }
+      params[key] = value;
+    }
+
+    return params;
   }
 
   /** Schedule auto-clear for fire-and-forget effects */
@@ -150,16 +332,14 @@ export class ActionEngine {
 
   private executeSpotlight(action: SpotlightAction): void {
     useCanvasStore.getState().setSpotlight(action.elementId, {
-      dimness: action.dimOpacity ?? 0.5,
+      dimness: normalizeSpotlightDimness(action.dimOpacity),
     });
     this.scheduleEffectClear();
   }
 
   private executeLaser(action: LaserAction): void {
-    useCanvasStore.getState().setLaser(action.elementId, {
-      color: action.color ?? '#ff0000',
-    });
-    this.scheduleEffectClear();
+    log.info(`Ignoring disabled laser action for element: ${action.elementId}`);
+    useCanvasStore.getState().clearLaser();
   }
 
   // ==================== Synchronous — Speech ====================
@@ -310,7 +490,7 @@ export class ActionEngine {
         width: action.width ?? 400,
         height: action.height ?? 100,
         rotate: 0,
-        defaultFontName: 'Microsoft YaHei',
+        defaultFontName: DEFAULT_SCREEN_FONT_NAME,
         defaultColor: action.color ?? '#333333',
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
@@ -362,7 +542,7 @@ export class ActionEngine {
         rotate: 0,
         chartType: action.chartType,
         data: action.data,
-        themeColors: action.themeColors ?? ['#5b9bd5', '#ed7d31', '#a5a5a5', '#ffc000', '#4472c4'],
+        themeColors: action.themeColors ?? [...getPresentationPalette().chartColors],
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
       wb.data.id,
@@ -376,7 +556,8 @@ export class ActionEngine {
     if (!wb.success || !wb.data) return;
 
     try {
-      const html = katex.renderToString(action.latex, {
+      const latex = repairMathLatex(action.latex);
+      const html = katex.renderToString(latex, {
         throwOnError: false,
         displayMode: true,
         output: 'html',
@@ -391,7 +572,7 @@ export class ActionEngine {
           width: action.width ?? 400,
           height: action.height ?? 80,
           rotate: 0,
-          latex: action.latex,
+          latex,
           html,
           color: action.color ?? '#000000',
           fixedRatio: true,
@@ -530,5 +711,34 @@ export class ActionEngine {
     useCanvasStore.getState().setWhiteboardOpen(false);
     // Wait for close animation (500ms ease-out tween)
     await delay(700);
+  }
+
+  private async executeWaitForUserTeaching(action: WaitForUserTeachingAction): Promise<void> {
+    await this.ensureWhiteboardOpen();
+
+    const prompt = action.prompt || DEFAULT_USER_TEACHING_PROMPT;
+    useCanvasStore.getState().setStudentTeachingState(true, prompt);
+
+    if (!this.options.onWaitForUserTeaching) {
+      log.warn('[wait_for_user_teaching] No wait handler registered; action will not block.');
+      return;
+    }
+
+    try {
+      await this.options.onWaitForUserTeaching({ ...action, prompt });
+    } catch (error) {
+      log.warn('[wait_for_user_teaching] Wait handler failed; continuing playback:', error);
+    } finally {
+      useCanvasStore.getState().setStudentTeachingState(false, null);
+    }
+  }
+
+  private executeRequestClarification(action: RequestClarificationAction): void {
+    const message = action.message?.trim() || DEFAULT_REQUEST_CLARIFICATION_MESSAGE;
+    log.warn('[VisionFallback] request_clarification action executed:', {
+      visionConfidence: action.visionConfidence,
+      reason: action.reason,
+      message,
+    });
   }
 }

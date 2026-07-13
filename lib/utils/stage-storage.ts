@@ -48,6 +48,9 @@ export async function saveStageData(stageId: string, data: StageStoreData): Prom
       style: data.stage.style,
       currentSceneId: data.currentSceneId || undefined,
       agentIds: data.stage.agentIds,
+      generationParams: data.stage.generationParams,
+      bookLessonContext: data.stage.bookLessonContext,
+      learningContext: data.stage.learningContext,
     });
 
     // Delete old scenes first to avoid orphaned data
@@ -120,6 +123,8 @@ export async function deleteStageData(stageId: string): Promise<void> {
 
     // Delete scenes
     await db.scenes.where('stageId').equals(stageId).delete();
+    await db.learningEvidence.where('stageId').equals(stageId).delete();
+    await db.learningVoiceRecords.where('stageId').equals(stageId).delete();
 
     // Delete chat sessions and playback state
     await deleteChatSessions(stageId);

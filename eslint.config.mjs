@@ -14,6 +14,16 @@ const eslintConfig = defineConfig([
     'next-env.d.ts',
     // Vendored/generated code:
     'packages/**',
+    'dev/**',
+    'src-tauri/target/**',
+    '.cache/**',
+    '.hf-cache/**',
+    '.matplotlib-cache/**',
+    '.modelscope-cache/**',
+    '.torch-cache/**',
+    '.uv-cache/**',
+    '.uv-python/**',
+    '*.log',
     // Claude Code local files:
     '.claude/**',
     '.superpowers/**',

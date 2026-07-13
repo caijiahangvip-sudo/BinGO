@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -18,8 +18,46 @@ import type { ASRProviderId } from '@/lib/audio/types';
 import { Mic, MicOff, CheckCircle2, XCircle, Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { createLogger } from '@/lib/logger';
+import { ServiceModelManager, type ServiceModelInfo } from './service-model-manager';
+import {
+  fetchWithSettingsTimeout,
+  getAbortErrorMessage,
+  isAbortError,
+  LOCAL_SERVICE_TEST_STARTUP_TIMEOUT_MS,
+  type SettingsTestOptions,
+} from './utils';
 
 const log = createLogger('ASRSettings');
+
+function createSilentWavBlob(durationSeconds = 0.2, sampleRate = 16000): Blob {
+  const samples = Math.floor(durationSeconds * sampleRate);
+  const bytesPerSample = 2;
+  const dataSize = samples * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * bytesPerSample, true);
+  view.setUint16(32, bytesPerSample, true);
+  view.setUint16(34, 8 * bytesPerSample, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
 
 interface ASRSettingsProps {
   selectedProviderId: ASRProviderId;
@@ -32,8 +70,15 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
   const asrProvidersConfig = useSettingsStore((state) => state.asrProvidersConfig);
   const setASRProviderConfig = useSettingsStore((state) => state.setASRProviderConfig);
 
-  const asrProvider = ASR_PROVIDERS[selectedProviderId] ?? ASR_PROVIDERS['openai-whisper'];
-  const isServerConfigured = !!asrProvidersConfig[selectedProviderId]?.isServerConfigured;
+  const selectedProviderConfig = asrProvidersConfig[selectedProviderId];
+  const compatibleProviderId = selectedProviderConfig?.compatibleProviderId || selectedProviderId;
+  const asrProvider = ASR_PROVIDERS[compatibleProviderId] ?? ASR_PROVIDERS['openai-whisper'];
+  const visibleModels = selectedProviderConfig?.models || [
+    ...asrProvider.models,
+    ...(selectedProviderConfig?.customModels || []),
+  ];
+  const requiresApiKey = selectedProviderConfig?.requiresApiKey ?? asrProvider.requiresApiKey;
+  const isServerConfigured = !!selectedProviderConfig?.isServerConfigured;
 
   const [showApiKey, setShowApiKey] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -52,6 +97,80 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
     setASRResult('');
   }
 
+  const handleModelsChange = useCallback(
+    (models: ServiceModelInfo[]) => {
+      setASRProviderConfig(selectedProviderId, {
+        models,
+        customModels: [],
+      });
+
+      const currentModelId = selectedProviderConfig?.modelId || asrProvider.defaultModelId;
+      if (!models.some((model) => model.id === currentModelId)) {
+        setASRProviderConfig(selectedProviderId, { modelId: models[0]?.id || '' });
+      }
+    },
+    [asrProvider, selectedProviderConfig?.modelId, selectedProviderId, setASRProviderConfig],
+  );
+
+  const handleSelectedModelChange = useCallback(
+    (modelId: string) => {
+      setASRProviderConfig(selectedProviderId, { modelId });
+    },
+    [selectedProviderId, setASRProviderConfig],
+  );
+
+  const handleTestModel = useCallback(
+    async (model: ServiceModelInfo, options?: SettingsTestOptions) => {
+      if (compatibleProviderId === 'browser-native') {
+        return {
+          success: true,
+          message: t('settings.connectionSuccess'),
+        };
+      }
+
+      const formData = new FormData();
+      formData.append('audio', createSilentWavBlob(), 'test.wav');
+      formData.append('providerId', selectedProviderId);
+      formData.append('compatibleProviderId', compatibleProviderId);
+      formData.append('modelId', model.id);
+      formData.append('language', asrLanguage || 'auto');
+      if (selectedProviderConfig?.apiKey?.trim()) {
+        formData.append('apiKey', selectedProviderConfig.apiKey);
+      }
+      if (selectedProviderConfig?.baseUrl?.trim()) {
+        formData.append('baseUrl', selectedProviderConfig.baseUrl);
+      }
+      if (options?.localServiceStartupTimeoutMs) {
+        formData.append(
+          'localServiceStartupTimeoutMs',
+          String(options.localServiceStartupTimeoutMs),
+        );
+      }
+
+      const response = await fetchWithSettingsTimeout('/api/transcription', {
+        method: 'POST',
+        body: formData,
+        signal: options?.signal,
+      });
+      const data = await response.json().catch(() => ({ error: response.statusText }));
+      return {
+        success: response.ok && !!data.success,
+        message:
+          data.message ||
+          data.error ||
+          data.details ||
+          (data.success ? t('settings.connectionSuccess') : t('settings.connectionFailed')),
+      };
+    },
+    [
+      asrLanguage,
+      compatibleProviderId,
+      selectedProviderConfig,
+      selectedProviderId,
+      t,
+    ],
+  );
+
   const handleToggleASRRecording = async () => {
     if (isRecording) {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
@@ -63,7 +182,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
       setTestStatus('testing');
       setTestMessage('');
 
-      if (selectedProviderId === 'browser-native') {
+      if (compatibleProviderId === 'browser-native') {
         const SpeechRecognitionCtor =
           (window as unknown as Record<string, unknown>).SpeechRecognition ||
           (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
@@ -111,18 +230,23 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
             const formData = new FormData();
             formData.append('audio', audioBlob, 'recording.webm');
             formData.append('providerId', selectedProviderId);
+            formData.append('compatibleProviderId', compatibleProviderId);
             formData.append(
               'modelId',
-              asrProvidersConfig[selectedProviderId]?.modelId || asrProvider.defaultModelId,
+              selectedProviderConfig?.modelId || asrProvider.defaultModelId,
             );
             formData.append('language', asrLanguage);
-            const apiKeyValue = asrProvidersConfig[selectedProviderId]?.apiKey;
+            const apiKeyValue = selectedProviderConfig?.apiKey;
             if (apiKeyValue?.trim()) formData.append('apiKey', apiKeyValue);
-            const baseUrlValue = asrProvidersConfig[selectedProviderId]?.baseUrl;
+            const baseUrlValue = selectedProviderConfig?.baseUrl;
             if (baseUrlValue?.trim()) formData.append('baseUrl', baseUrlValue);
+            formData.append(
+              'localServiceStartupTimeoutMs',
+              String(LOCAL_SERVICE_TEST_STARTUP_TIMEOUT_MS),
+            );
 
             try {
-              const response = await fetch('/api/transcription', {
+              const response = await fetchWithSettingsTimeout('/api/transcription', {
                 method: 'POST',
                 body: formData,
               });
@@ -141,7 +265,9 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
             } catch (error) {
               log.error('ASR test failed:', error);
               setTestStatus('error');
-              setTestMessage(t('settings.asrTestFailed'));
+              setTestMessage(
+                isAbortError(error) ? getAbortErrorMessage(t) : t('settings.asrTestFailed'),
+              );
             }
           };
           mediaRecorder.start();
@@ -165,7 +291,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
       )}
 
       {/* API Key & Base URL */}
-      {(asrProvider.requiresApiKey || isServerConfigured) && (
+      {(requiresApiKey || isServerConfigured) && (
         <>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -181,7 +307,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
                   placeholder={
                     isServerConfigured ? t('settings.optionalOverride') : t('settings.enterApiKey')
                   }
-                  value={asrProvidersConfig[selectedProviderId]?.apiKey || ''}
+                  value={selectedProviderConfig?.apiKey || ''}
                   onChange={(e) =>
                     setASRProviderConfig(selectedProviderId, {
                       apiKey: e.target.value,
@@ -206,8 +332,12 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
-                placeholder={asrProvider.defaultBaseUrl || t('settings.enterCustomBaseUrl')}
-                value={asrProvidersConfig[selectedProviderId]?.baseUrl || ''}
+                placeholder={
+                  selectedProviderConfig?.defaultBaseUrl ||
+                  asrProvider.defaultBaseUrl ||
+                  t('settings.enterCustomBaseUrl')
+                }
+                value={selectedProviderConfig?.baseUrl || ''}
                 onChange={(e) =>
                   setASRProviderConfig(selectedProviderId, {
                     baseUrl: e.target.value,
@@ -217,27 +347,6 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
               />
             </div>
           </div>
-          {/* Request URL Preview */}
-          {(() => {
-            const effectiveBaseUrl =
-              asrProvidersConfig[selectedProviderId]?.baseUrl || asrProvider.defaultBaseUrl || '';
-            if (!effectiveBaseUrl) return null;
-            let endpointPath = '';
-            switch (selectedProviderId) {
-              case 'openai-whisper':
-                endpointPath = '/audio/transcriptions';
-                break;
-              case 'qwen-asr':
-                endpointPath = '/services/aigc/multimodal-generation/generation';
-                break;
-            }
-            if (!endpointPath) return null;
-            return (
-              <p className="text-xs text-muted-foreground break-all">
-                {t('settings.requestUrl')}: {effectiveBaseUrl + endpointPath}
-              </p>
-            );
-          })()}
         </>
       )}
 
@@ -254,9 +363,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
           <Button
             onClick={handleToggleASRRecording}
             disabled={
-              asrProvider.requiresApiKey &&
-              !asrProvidersConfig[selectedProviderId]?.apiKey?.trim() &&
-              !isServerConfigured
+              requiresApiKey && !selectedProviderConfig?.apiKey?.trim() && !isServerConfigured
             }
             className="gap-2 w-[140px]"
           >
@@ -294,18 +401,18 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
       )}
 
       {/* Model Selection */}
-      {asrProvider.models.length > 0 && (
+      {visibleModels.length > 0 && (
         <div className="space-y-2">
           <Label className="text-sm">{t('settings.ttsModel')}</Label>
           <Select
-            value={asrProvidersConfig[selectedProviderId]?.modelId || asrProvider.defaultModelId}
+            value={selectedProviderConfig?.modelId || asrProvider.defaultModelId}
             onValueChange={(value) => setASRProviderConfig(selectedProviderId, { modelId: value })}
           >
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {asrProvider.models.map((model) => (
+              {visibleModels.map((model) => (
                 <SelectItem key={model.id} value={model.id}>
                   {model.name}
                 </SelectItem>
@@ -314,6 +421,16 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
           </Select>
         </div>
       )}
+
+      <ServiceModelManager
+        models={visibleModels}
+        onModelsChange={handleModelsChange}
+        onSelectedModelChange={handleSelectedModelChange}
+        onTestModel={handleTestModel}
+        testDisabled={
+          requiresApiKey && !selectedProviderConfig?.apiKey?.trim() && !isServerConfigured
+        }
+      />
     </div>
   );
 }

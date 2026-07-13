@@ -8,7 +8,6 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Plus } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { cn } from '@/lib/utils';
 
 export interface NewProviderData {
   name: string;
@@ -29,7 +28,6 @@ export function AddProviderDialog({ open, onOpenChange, onAdd }: AddProviderDial
 
   // Internal state
   const [name, setName] = useState('');
-  const [type, setType] = useState<'openai' | 'anthropic' | 'google'>('openai');
   const [baseUrl, setBaseUrl] = useState('');
   const [icon, setIcon] = useState('');
   const [requiresApiKey, setRequiresApiKey] = useState(true);
@@ -40,7 +38,6 @@ export function AddProviderDialog({ open, onOpenChange, onAdd }: AddProviderDial
     setPrevOpen(open);
     if (!open) {
       setName('');
-      setType('openai');
       setBaseUrl('');
       setIcon('');
       setRequiresApiKey(true);
@@ -54,7 +51,7 @@ export function AddProviderDialog({ open, onOpenChange, onAdd }: AddProviderDial
   const handleAdd = () => {
     onAdd({
       name,
-      type,
+      type: 'openai',
       baseUrl,
       icon,
       requiresApiKey,
@@ -81,46 +78,6 @@ export function AddProviderDialog({ open, onOpenChange, onAdd }: AddProviderDial
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
-          </div>
-
-          {/* API Mode */}
-          <div className="space-y-2">
-            <Label>{t('settings.providerApiMode')}</Label>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                onClick={() => setType('openai')}
-                className={cn(
-                  'p-2 rounded-lg border text-left text-sm transition-colors',
-                  type === 'openai'
-                    ? 'bg-primary/5 border-primary/50'
-                    : 'hover:bg-muted/50 border-transparent',
-                )}
-              >
-                {t('settings.apiModeOpenAI')}
-              </button>
-              <button
-                onClick={() => setType('anthropic')}
-                className={cn(
-                  'p-2 rounded-lg border text-left text-sm transition-colors',
-                  type === 'anthropic'
-                    ? 'bg-primary/5 border-primary/50'
-                    : 'hover:bg-muted/50 border-transparent',
-                )}
-              >
-                {t('settings.apiModeAnthropic')}
-              </button>
-              <button
-                onClick={() => setType('google')}
-                className={cn(
-                  'p-2 rounded-lg border text-left text-sm transition-colors',
-                  type === 'google'
-                    ? 'bg-primary/5 border-primary/50'
-                    : 'hover:bg-muted/50 border-transparent',
-                )}
-              >
-                {t('settings.apiModeGoogle')}
-              </button>
-            </div>
           </div>
 
           {/* Default Base URL */}

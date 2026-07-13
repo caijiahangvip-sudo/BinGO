@@ -7,7 +7,6 @@
  */
 
 import { create } from 'zustand';
-import type { MediaGenerationRequest } from '@/lib/media/types';
 import { db } from '@/lib/utils/database';
 import { createLogger } from '@/lib/logger';
 
@@ -35,11 +34,19 @@ export interface MediaTask {
   stageId: string;
 }
 
+interface LegacyMediaGenerationRequest {
+  elementId: string;
+  type: 'image' | 'video';
+  prompt: string;
+  aspectRatio?: string;
+  style?: string;
+}
+
 interface MediaGenerationState {
   tasks: Record<string, MediaTask>;
 
   // Batch enqueue
-  enqueueTasks: (stageId: string, requests: MediaGenerationRequest[]) => void;
+  enqueueTasks: (stageId: string, requests: LegacyMediaGenerationRequest[]) => void;
 
   // Status transitions
   markGenerating: (elementId: string) => void;
@@ -54,7 +61,12 @@ interface MediaGenerationState {
   isReady: (elementId: string) => boolean;
 
   // Restore from IndexedDB on page load
-  restoreFromDB: (stageId: string) => Promise<void>;
+  restoreFromDB: (
+    stageId: string,
+    options?: {
+      shouldApply?: () => boolean;
+    },
+  ) => Promise<void>;
 
   // Cleanup
   clearStage: (stageId: string) => void;
@@ -157,7 +169,7 @@ export const useMediaGenerationStore = create<MediaGenerationState>()((set, get)
 
   isReady: (elementId) => get().tasks[elementId]?.status === 'done',
 
-  restoreFromDB: async (stageId) => {
+  restoreFromDB: async (stageId, options) => {
     try {
       const records = await db.mediaFiles.where('stageId').equals(stageId).toArray();
       const restored: Record<string, MediaTask> = {};
@@ -197,6 +209,15 @@ export const useMediaGenerationStore = create<MediaGenerationState>()((set, get)
           };
         }
       }
+
+      if (options?.shouldApply && !options.shouldApply()) {
+        for (const task of Object.values(restored)) {
+          if (task.objectUrl) URL.revokeObjectURL(task.objectUrl);
+          if (task.poster) URL.revokeObjectURL(task.poster);
+        }
+        return;
+      }
+
       if (Object.keys(restored).length > 0) {
         set((s) => ({ tasks: { ...s.tasks, ...restored } }));
       }

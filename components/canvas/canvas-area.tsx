@@ -1,12 +1,11 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'motion/react';
-import { Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SceneRenderer } from '@/components/stage/scene-renderer';
 import { SceneProvider } from '@/lib/contexts/scene-context';
-import { Whiteboard } from '@/components/whiteboard';
 import { CanvasToolbar } from '@/components/canvas/canvas-toolbar';
 import type { CanvasToolbarProps } from '@/components/canvas/canvas-toolbar';
 import type { Scene, StageMode } from '@/lib/types/stage';
@@ -15,11 +14,47 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 interface CanvasAreaProps extends CanvasToolbarProps {
   readonly currentScene: Scene | null;
   readonly mode: StageMode;
+  readonly showTeachingEffects?: boolean;
   readonly hideToolbar?: boolean;
   readonly isPendingScene?: boolean;
   readonly isGenerationFailed?: boolean;
   readonly onRetryGeneration?: () => void;
+  readonly onNeedTeachingHint?: () => void;
 }
+
+type LazyWhiteboardProps = {
+  readonly isOpen: boolean;
+  readonly onClose: () => void;
+  readonly onNeedHint?: () => void;
+};
+
+function WhiteboardLoadingSkeleton() {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-background/90">
+      <div className="h-[82%] w-[86%] max-w-[920px] rounded-lg border border-border bg-card shadow-xl">
+        <div className="flex h-12 items-center gap-2 border-b border-border/70 px-4">
+          <div className="h-7 w-7 rounded-md bg-muted" />
+          <div className="h-7 w-7 rounded-md bg-muted" />
+          <div className="h-7 w-7 rounded-md bg-muted" />
+          <div className="ml-auto h-7 w-20 rounded-md bg-muted" />
+        </div>
+        <div className="flex h-[calc(100%-3rem)] items-center justify-center p-5">
+          <div className="h-full w-full rounded-lg border border-dashed border-border bg-background">
+            <div className="h-full w-full animate-pulse bg-[linear-gradient(110deg,transparent,rgba(148,163,184,0.16),transparent)] bg-[length:220%_100%]" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const Whiteboard = dynamic<LazyWhiteboardProps>(
+  () => import('@/components/whiteboard').then((mod) => mod.Whiteboard),
+  {
+    ssr: false,
+    loading: () => <WhiteboardLoadingSkeleton />,
+  },
+);
 
 export function CanvasArea({
   currentScene,
@@ -27,6 +62,7 @@ export function CanvasArea({
   scenesCount,
   mode,
   engineState,
+  showTeachingEffects = false,
   isLiveSession,
   whiteboardOpen,
   sidebarCollapsed,
@@ -45,15 +81,44 @@ export function CanvasArea({
   isPendingScene,
   isGenerationFailed,
   onRetryGeneration,
+  onNeedTeachingHint,
 }: CanvasAreaProps) {
   const { t } = useI18n();
   const showControls = mode === 'playback' && !whiteboardOpen;
-  const showPlayHint =
-    showControls &&
-    engineState !== 'playing' &&
-    currentScene?.type === 'slide' &&
-    !isLiveSession &&
-    !isPendingScene;
+  const frameHostRef = useRef<HTMLDivElement>(null);
+  const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    const host = frameHostRef.current;
+    if (!host) return;
+
+    const updateFrameSize = () => {
+      const { width, height } = host.getBoundingClientRect();
+      if (width <= 0 || height <= 0) return;
+
+      const ratio = 16 / 9;
+      const nextWidth = Math.min(width, height * ratio);
+      const nextHeight = nextWidth / ratio;
+
+      setFrameSize((prev) => {
+        const roundedWidth = Math.round(nextWidth);
+        const roundedHeight = Math.round(nextHeight);
+        if (prev.width === roundedWidth && prev.height === roundedHeight) return prev;
+        return { width: roundedWidth, height: roundedHeight };
+      });
+    };
+
+    updateFrameSize();
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateFrameSize);
+      return () => window.removeEventListener('resize', updateFrameSize);
+    }
+
+    const observer = new ResizeObserver(updateFrameSize);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
 
   const handleSlideClick = useCallback(
     (e: React.MouseEvent) => {
@@ -80,150 +145,123 @@ export function CanvasArea({
   );
 
   return (
-    <div className="w-full h-full flex flex-col bg-gray-50 dark:bg-gray-900 group/canvas">
+    <div className="w-full h-full flex flex-col bg-background group/canvas">
       {/* Slide area — takes remaining space */}
       <div
         className={cn(
           'flex-1 min-h-0 relative overflow-hidden flex items-center justify-center p-2 transition-colors duration-500',
-          currentScene?.type === 'interactive'
-            ? 'bg-blue-50/30 dark:bg-blue-900/10'
-            : 'bg-gray-50/30 dark:bg-gray-900/30',
+          currentScene?.type === 'interactive' ? 'bg-secondary/40' : 'bg-background/60',
         )}
       >
-        <div
-          className={cn(
-            'aspect-[16/9] h-full max-h-full max-w-full bg-white dark:bg-gray-800 shadow-2xl rounded-lg overflow-hidden relative transition-all duration-700',
-            showControls && !isLiveSession && currentScene?.type === 'slide' && 'cursor-pointer',
-            currentScene?.type === 'interactive'
-              ? 'shadow-blue-200/50 dark:shadow-blue-900/50 ring-1 ring-blue-900/5 dark:ring-blue-500/10'
-              : 'shadow-gray-200/50 dark:shadow-gray-800/50 ring-1 ring-gray-950/5 dark:ring-white/5',
-          )}
-          onClick={handleSlideClick}
-        >
-          {/* Whiteboard Layer */}
-          <div className="absolute inset-0 z-[110] pointer-events-none">
-            <SceneProvider>
-              <Whiteboard isOpen={whiteboardOpen} onClose={onWhiteboardClose} />
-            </SceneProvider>
-          </div>
-
-          {/* Scene Content */}
-          {currentScene && !whiteboardOpen && (
-            <div className="absolute inset-0">
-              <SceneProvider>
-                <SceneRenderer scene={currentScene} mode={mode} />
-              </SceneProvider>
-            </div>
-          )}
-
-          {/* Pending Scene Loading Overlay */}
-          <AnimatePresence>
-            {isPendingScene && !currentScene && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.4, ease: 'easeOut' }}
-                className="absolute inset-0 z-[105] flex flex-col items-center justify-center bg-white dark:bg-gray-800"
-              >
-                {isGenerationFailed ? (
-                  <div className="flex flex-col items-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-red-50 dark:bg-red-900/20 flex items-center justify-center">
-                      <svg
-                        className="w-6 h-6 text-red-400 dark:text-red-500"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={1.5}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
-                        />
-                      </svg>
-                    </div>
-                    <span className="text-sm text-red-500 dark:text-red-400 font-medium">
-                      {t('stage.generationFailed')}
-                    </span>
-                    {onRetryGeneration && (
-                      <button
-                        onClick={onRetryGeneration}
-                        className="mt-1 px-4 py-1.5 text-xs font-medium rounded-full bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors active:scale-95"
-                      >
-                        {t('generation.retryScene')}
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-4">
-                    {/* Spinner */}
-                    <div className="relative w-12 h-12">
-                      <div className="absolute inset-0 rounded-full border-2 border-gray-100 dark:border-gray-700" />
-                      <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-purple-500 dark:border-t-purple-400 animate-spin" />
-                    </div>
-                    {/* Text */}
-                    <motion.span
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.2, duration: 0.3 }}
-                      className="text-sm text-gray-400 dark:text-gray-500 font-medium"
-                    >
-                      {t('stage.generatingNextPage')}
-                    </motion.span>
-                  </div>
-                )}
-              </motion.div>
+        <div ref={frameHostRef} className="relative flex h-full w-full items-center justify-center">
+          <div
+            className={cn(
+              'bg-card shadow-2xl rounded-lg overflow-hidden relative transition-all duration-700',
+              showControls && !isLiveSession && currentScene?.type === 'slide' && 'cursor-pointer',
+              currentScene?.type === 'interactive'
+                ? 'shadow-[0_22px_60px_rgba(var(--app-shadow-rgb),0.18)] ring-1 ring-primary/10'
+                : 'shadow-[0_22px_60px_rgba(var(--app-shadow-rgb),0.16)] ring-1 ring-border/70',
             )}
-          </AnimatePresence>
+            style={{
+              width: frameSize.width ? `${frameSize.width}px` : '100%',
+              height: frameSize.height ? `${frameSize.height}px` : '100%',
+            }}
+            onClick={handleSlideClick}
+          >
+            {/* Whiteboard Layer */}
+            {whiteboardOpen && (
+              <div className="absolute inset-0 z-[110] pointer-events-none">
+                <SceneProvider>
+                  <Whiteboard
+                    isOpen={whiteboardOpen}
+                    onClose={onWhiteboardClose}
+                    onNeedHint={onNeedTeachingHint}
+                  />
+                </SceneProvider>
+              </div>
+            )}
 
-          {/* Scene Number Badge */}
-          {currentScene && (
-            <div className="absolute top-4 right-4 text-gray-200 dark:text-gray-700 font-black text-4xl opacity-50 pointer-events-none select-none mix-blend-multiply dark:mix-blend-screen">
-              {(currentSceneIndex + 1).toString().padStart(2, '0')}
-            </div>
-          )}
+            {/* Scene Content */}
+            {currentScene && !whiteboardOpen && (
+              <div className="absolute inset-0">
+                <SceneProvider>
+                  <SceneRenderer
+                    scene={currentScene}
+                    mode={mode}
+                    showTeachingEffects={showTeachingEffects}
+                  />
+                </SceneProvider>
+              </div>
+            )}
 
-          {/* Play hint — breathing button when idle or paused (slides only) */}
-          <AnimatePresence>
-            {showPlayHint && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.3 }}
-                className="absolute inset-0 z-[102] flex items-center justify-center pointer-events-none"
-              >
+            {/* Pending Scene Loading Overlay */}
+            <AnimatePresence>
+              {isPendingScene && !currentScene && (
                 <motion.div
-                  className="opacity-50 group-hover/canvas:opacity-100 transition-opacity duration-300 pointer-events-auto cursor-pointer"
-                  exit={{ pointerEvents: 'none' }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onPlayPause();
-                  }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.4, ease: 'easeOut' }}
+                  className="absolute inset-0 z-[105] flex flex-col items-center justify-center bg-card"
                 >
-                  <motion.div
-                    initial={{ scale: 0.85 }}
-                    animate={{ scale: [1, 1.06] }}
-                    exit={{ scale: 1.15, opacity: 0 }}
-                    transition={{
-                      default: { duration: 0.3, ease: [0.4, 0, 0.2, 1] },
-                      scale: {
-                        repeat: Infinity,
-                        repeatType: 'mirror',
-                        duration: 1,
-                        ease: 'easeInOut',
-                      },
-                    }}
-                    className="w-20 h-20 rounded-full bg-white/95 dark:bg-gray-800/95 flex items-center justify-center shadow-[0_4px_30px_rgba(147,51,234,0.15),inset_0_0_0_1px_rgba(233,213,255,0.5)] dark:shadow-[0_4px_30px_rgba(147,51,234,0.3),inset_0_0_0_1px_rgba(126,34,206,0.3)]"
-                    style={{ willChange: 'transform' }}
-                  >
-                    <Play className="w-7 h-7 text-purple-600 dark:text-purple-400 fill-purple-600/90 dark:fill-purple-400/90 ml-0.5" />
-                  </motion.div>
+                  {isGenerationFailed ? (
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="w-12 h-12 rounded-full bg-red-50 dark:bg-red-900/20 flex items-center justify-center">
+                        <svg
+                          className="w-6 h-6 text-red-400 dark:text-red-500"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
+                          />
+                        </svg>
+                      </div>
+                      <span className="text-sm text-red-500 dark:text-red-400 font-medium">
+                        {t('stage.generationFailed')}
+                      </span>
+                      {onRetryGeneration && (
+                        <button
+                          onClick={onRetryGeneration}
+                          className="mt-1 px-4 py-1.5 text-xs font-medium rounded-full bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors active:scale-95"
+                        >
+                          {t('generation.retryScene')}
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-4">
+                      {/* Spinner */}
+                      <div className="relative w-12 h-12">
+                        <div className="absolute inset-0 rounded-full border-2 border-muted" />
+                        <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-primary animate-spin" />
+                      </div>
+                      {/* Text */}
+                      <motion.span
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.2, duration: 0.3 }}
+                        className="text-sm text-muted-foreground font-medium"
+                      >
+                        {t('stage.generatingNextPage')}
+                      </motion.span>
+                    </div>
+                  )}
                 </motion.div>
-              </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Scene Number Badge */}
+            {currentScene && (
+              <div className="absolute top-4 right-4 text-muted-foreground/25 font-black text-4xl opacity-50 pointer-events-none select-none mix-blend-multiply dark:mix-blend-screen">
+                {(currentSceneIndex + 1).toString().padStart(2, '0')}
+              </div>
             )}
-          </AnimatePresence>
+          </div>
         </div>
       </div>
 
@@ -232,8 +270,8 @@ export function CanvasArea({
         <CanvasToolbar
           className={cn(
             'shrink-0 h-9 px-2',
-            'bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl',
-            'border-t border-gray-200/40 dark:border-gray-700/40',
+            'bg-card/80 backdrop-blur-xl',
+            'border-t border-border/60',
           )}
           currentSceneIndex={currentSceneIndex}
           scenesCount={scenesCount}

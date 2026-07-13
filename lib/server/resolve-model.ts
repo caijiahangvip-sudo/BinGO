@@ -6,15 +6,44 @@
  */
 
 import type { NextRequest } from 'next/server';
-import { getModel, parseModelString, type ModelWithInfo } from '@/lib/ai/providers';
+import { getModel, parseModelString, type ModelWithInfo } from '@/lib/server/ai-provider-runtime';
 import { resolveApiKey, resolveBaseUrl, resolveProxy } from '@/lib/server/provider-config';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
+import type { ModelInfo } from '@/lib/types/provider';
 
 export interface ResolvedModel extends ModelWithInfo {
   /** Original model string (e.g. "openai/gpt-4o-mini") */
   modelString: string;
   /** Effective API key after server-side fallback resolution */
   apiKey: string;
+  /** Effective base URL after request/server fallback resolution */
+  baseUrl?: string;
+}
+
+function parseBooleanHeader(value: string | null): boolean | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return undefined;
+}
+
+function mergeModelCapabilities(
+  modelInfo: ModelInfo | null,
+  capabilities: ModelInfo['capabilities'] | undefined,
+): ModelInfo | null {
+  if (!capabilities || Object.values(capabilities).every((value) => value === undefined)) {
+    return modelInfo;
+  }
+
+  return {
+    id: modelInfo?.id || '',
+    name: modelInfo?.name || modelInfo?.id || '',
+    ...modelInfo,
+    capabilities: {
+      ...modelInfo?.capabilities,
+      ...capabilities,
+    },
+  };
 }
 
 /**
@@ -28,6 +57,7 @@ export function resolveModel(params: {
   baseUrl?: string;
   providerType?: string;
   requiresApiKey?: boolean;
+  capabilities?: ModelInfo['capabilities'];
 }): ResolvedModel {
   const modelString = params.modelString || process.env.DEFAULT_MODEL || 'gpt-4o-mini';
   const { providerId, modelId } = parseModelString(modelString);
@@ -55,13 +85,20 @@ export function resolveModel(params: {
     requiresApiKey: params.requiresApiKey,
   });
 
-  return { model, modelInfo, modelString, apiKey };
+  return {
+    model,
+    modelInfo: mergeModelCapabilities(modelInfo, params.capabilities),
+    modelString,
+    apiKey,
+    baseUrl,
+  };
 }
 
 /**
  * Resolve a language model from standard request headers.
  *
- * Reads: x-model, x-api-key, x-base-url, x-provider-type, x-requires-api-key
+ * Reads: x-model, x-api-key, x-base-url, x-provider-type, x-requires-api-key,
+ * x-model-capability-vision, x-model-capability-tools, x-model-capability-streaming
  */
 export function resolveModelFromHeaders(req: NextRequest): ResolvedModel {
   return resolveModel({
@@ -70,5 +107,10 @@ export function resolveModelFromHeaders(req: NextRequest): ResolvedModel {
     baseUrl: req.headers.get('x-base-url') || undefined,
     providerType: req.headers.get('x-provider-type') || undefined,
     requiresApiKey: req.headers.get('x-requires-api-key') === 'true' ? true : undefined,
+    capabilities: {
+      vision: parseBooleanHeader(req.headers.get('x-model-capability-vision')),
+      tools: parseBooleanHeader(req.headers.get('x-model-capability-tools')),
+      streaming: parseBooleanHeader(req.headers.get('x-model-capability-streaming')),
+    },
   });
 }

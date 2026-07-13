@@ -15,7 +15,7 @@ import { AGENT_COLOR_PALETTE } from '@/lib/constants/agent-defaults';
 
 const log = createLogger('Agent Profiles API');
 
-export const maxDuration = 120;
+export const maxDuration = 45;
 
 interface RequestBody {
   stageInfo: { name: string; description?: string };
@@ -24,6 +24,7 @@ interface RequestBody {
   availableAvatars: string[];
   avatarDescriptions?: Array<{ path: string; desc: string }>;
   availableVoices?: Array<{ providerId: string; voiceId: string; voiceName: string }>;
+  agentCount?: number;
 }
 
 function stripCodeFences(text: string): string {
@@ -47,6 +48,7 @@ export async function POST(req: NextRequest) {
       availableAvatars,
       avatarDescriptions,
       availableVoices,
+      agentCount,
     } = body;
     stageName = stageInfo?.name;
 
@@ -76,7 +78,9 @@ export async function POST(req: NextRequest) {
           .join('\n')
       : null;
 
-    const systemPrompt = `You are an expert instructional designer. Generate agent profiles for a multi-agent classroom simulation. Decide the appropriate number of agents (typically 3-5) based on the course content and complexity. Return ONLY valid JSON, no markdown or explanation.`;
+    const resolvedAgentCount = Math.max(2, Math.min(5, Math.round(agentCount || 3)));
+
+    const systemPrompt = `Generate concise classroom role profiles. Return ONLY valid JSON, no markdown or explanation.`;
 
     // Build voice list for prompt (if available)
     const voiceListStr =
@@ -99,18 +103,23 @@ export async function POST(req: NextRequest) {
       ? ',\n      "voice": "string (voice id from available list, e.g. \'qwen-tts::Cherry\')"'
       : '';
 
-    const userPrompt = `Generate agent profiles for the following course:
+    const avatarList =
+      avatarDescriptions && avatarDescriptions.length > 0
+        ? avatarDescriptions.map((a) => ({ path: a.path, description: a.desc }))
+        : availableAvatars;
+
+    const userPrompt = `Generate ${resolvedAgentCount} agent profiles for this course:
 
 Course name: ${stageInfo.name}
 ${stageInfo.description ? `Course description: ${stageInfo.description}` : ''}
 ${sceneSummary ? `\nScene outlines:\n${sceneSummary}\n` : ''}
 Requirements:
-- Decide the appropriate number of agents based on the course content (typically 3-5)
+- Return exactly ${resolvedAgentCount} agents
 - Exactly 1 agent must have role "teacher", the rest can be "assistant" or "student"
 - Priority values: teacher=10 (highest), assistant=7, student=4-6
-- Each agent needs: name, role, persona (2-3 sentences describing personality and teaching/learning style)
+- Each agent needs: name, role, persona (1 concise sentence describing personality and teaching/learning style)
 - Names and personas must be in language: ${language}
-- Each agent must be assigned one avatar from this list: ${JSON.stringify(avatarDescriptions && avatarDescriptions.length > 0 ? avatarDescriptions.map((a) => ({ path: a.path, description: a.desc })) : availableAvatars)}
+- Each agent must be assigned one avatar from this list: ${JSON.stringify(avatarList)}
   - Pick an avatar that visually matches the agent's personality and role
   - Try to use different avatars for each agent
   - Use the "path" value as the avatar field in the output
@@ -124,7 +133,7 @@ Return a JSON object with this exact structure:
     {
       "name": "string",
       "role": "teacher" | "assistant" | "student",
-      "persona": "string (2-3 sentences)",
+      "persona": "string (1 concise sentence)",
       "avatar": "string (from available list)",
       "color": "string (hex color from palette)",
       "priority": number (10 for teacher, 7 for assistant, 4-6 for student)${voiceJsonField}
@@ -139,8 +148,12 @@ Return a JSON object with this exact structure:
         model: languageModel,
         system: systemPrompt,
         prompt: userPrompt,
+        maxOutputTokens: 1200,
+        __skipChineseXinhuaContext: true,
       },
       'agent-profiles',
+      undefined,
+      { enabled: false },
     );
 
     // ── Parse LLM response ──
@@ -171,6 +184,14 @@ Return a JSON object with this exact structure:
         'GENERATION_FAILED',
         500,
         `Expected at least 2 agents but LLM returned ${parsed.agents?.length ?? 0}`,
+      );
+    }
+    if (parsed.agents.length !== resolvedAgentCount) {
+      log.error(`Expected exactly ${resolvedAgentCount} agents, got ${parsed.agents.length}`);
+      return apiError(
+        'GENERATION_FAILED',
+        500,
+        `Expected exactly ${resolvedAgentCount} agents but LLM returned ${parsed.agents.length}`,
       );
     }
 

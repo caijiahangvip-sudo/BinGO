@@ -102,7 +102,7 @@ export interface StreamBufferCallbacks {
    */
   onTextReveal(messageId: string, partId: string, revealedText: string, isComplete: boolean): void;
   /** Fired when tick reaches an action item. Callers should execute the effect + add badge. */
-  onActionReady(messageId: string, data: ActionItem): void;
+  onActionReady(messageId: string, data: ActionItem): void | Promise<void>;
   /**
    * Unified speech feed for the Roundtable bubble.
    * Reports only the CURRENT segment text (resets on action / agent switch).
@@ -180,6 +180,7 @@ export class StreamBuffer {
   /** True when a text item's post-delay has elapsed and we're waiting for TTS to finish. */
   private _holdingForTTS = false;
   private _holdSegmentSnapshot = -1;
+  private _actionAwaiting = false;
 
   // Config
   private readonly tickMs: number;
@@ -434,7 +435,7 @@ export class StreamBuffer {
   }
 
   private tick(): void {
-    if (this._paused || this._disposed) return;
+    if (this._paused || this._disposed || this._actionAwaiting) return;
 
     // Honour dwell / action-delay countdown before advancing
     if (this._dwellTicksRemaining > 0) {
@@ -555,14 +556,7 @@ export class StreamBuffer {
         break;
 
       case 'action':
-        this.currentSegmentText = '';
-        this.cb.onActionReady(item.messageId, item);
-        this.cb.onLiveSpeech(null, this.currentAgentId);
-        this.readIndex++;
-        this.charCursor = 0;
-        // Delay after action so animations have time to play out
-        if (this.actionDelayTicks > 0) {
-          this._dwellTicksRemaining = this.actionDelayTicks;
+        if (this.processActionItem(item)) {
           return;
         }
         this.advanceNonText();
@@ -619,6 +613,7 @@ export class StreamBuffer {
    */
   private advanceNonText(): void {
     while (this.readIndex < this.items.length) {
+      if (this._actionAwaiting) return;
       const next = this.items[this.readIndex];
       if (next.kind === 'text') break; // Let the next tick handle text
 
@@ -634,17 +629,10 @@ export class StreamBuffer {
           this.cb.onAgentEnd(next);
           break;
         case 'action':
-          this.currentSegmentText = '';
-          this.cb.onActionReady(next.messageId, next);
-          this.cb.onLiveSpeech(null, this.currentAgentId);
-          this.readIndex++;
-          this.charCursor = 0;
-          // Pause after action to let animation play
-          if (this.actionDelayTicks > 0) {
-            this._dwellTicksRemaining = this.actionDelayTicks;
-            return; // resume on next tick after countdown
+          if (this.processActionItem(next)) {
+            return;
           }
-          continue; // no delay — keep advancing
+          continue; // no delay and no async wait — keep advancing
         case 'thinking':
           this.cb.onThinking(next);
           break;
@@ -674,5 +662,52 @@ export class StreamBuffer {
       this.readIndex++;
       this.charCursor = 0;
     }
+  }
+
+  /**
+   * Process an action item. Returns true when buffer advancement should stop
+   * because the action is async or an action delay is active.
+   */
+  private processActionItem(item: ActionItem): boolean {
+    this.currentSegmentText = '';
+
+    let actionResult: void | Promise<void>;
+    try {
+      actionResult = this.cb.onActionReady(item.messageId, item);
+    } catch (error) {
+      this.cb.onError(error instanceof Error ? error.message : String(error));
+      actionResult = undefined;
+    }
+
+    this.cb.onLiveSpeech(null, this.currentAgentId);
+    this.readIndex++;
+    this.charCursor = 0;
+
+    if (actionResult && typeof actionResult.then === 'function') {
+      this._actionAwaiting = true;
+      actionResult
+        .catch((error) => {
+          if (!this._disposed) {
+            this.cb.onError(error instanceof Error ? error.message : String(error));
+          }
+        })
+        .finally(() => {
+          if (this._disposed) return;
+          this._actionAwaiting = false;
+          if (this.actionDelayTicks > 0) {
+            this._dwellTicksRemaining = this.actionDelayTicks;
+            return;
+          }
+          this.advanceNonText();
+        });
+      return true;
+    }
+
+    if (this.actionDelayTicks > 0) {
+      this._dwellTicksRemaining = this.actionDelayTicks;
+      return true;
+    }
+
+    return false;
   }
 }

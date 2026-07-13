@@ -55,6 +55,10 @@ export interface ThinkingConfig {
    */
   enabled?: boolean;
   /**
+   * OpenAI reasoning effort. Use lowercase API values; "xhigh" is shown as X-high in the UI.
+   */
+  effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  /**
    * Budget hint in tokens. Only used when enabled=true or undefined.
    * Adapter maps to closest supported value per provider.
    */

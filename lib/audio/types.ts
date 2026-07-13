@@ -9,6 +9,7 @@
  * - Azure TTS (https://learn.microsoft.com/en-us/azure/ai-services/speech-service/text-to-speech)
  * - GLM TTS (https://docs.bigmodel.cn/cn/guide/models/sound-and-video/glm-tts)
  * - Qwen TTS (https://bailian.console.aliyun.com/)
+ * - CosyVoice TTS (https://github.com/FunAudioLLM/CosyVoice)
  * - Doubao TTS (https://www.volcengine.com/docs/6561/1257543)
  * - Browser Native TTS (Web Speech API, client-side only)
  *
@@ -16,6 +17,7 @@
  * - OpenAI Whisper (https://platform.openai.com/docs/guides/speech-to-text)
  * - Browser Native (Web Speech API, client-side only)
  * - Qwen ASR (DashScope API)
+ * - SenseVoice (local open-source service)
  *
  * Future Provider Support (extensible):
  * - ElevenLabs TTS/ASR (https://elevenlabs.io/docs)
@@ -78,15 +80,17 @@
  * Add new TTS providers here as union members.
  * Keep in sync with TTS_PROVIDERS registry in constants.ts
  */
-export type TTSProviderId =
+export type BuiltInTTSProviderId =
   | 'openai-tts'
   | 'azure-tts'
   | 'glm-tts'
   | 'qwen-tts'
+  | 'cosyvoice-tts'
   | 'doubao-tts'
   | 'elevenlabs-tts'
   | 'minimax-tts'
   | 'browser-native-tts';
+export type TTSProviderId = BuiltInTTSProviderId | (string & {});
 // Add new TTS providers below (uncomment and modify):
 // | 'fish-audio-tts'
 // | 'cartesia-tts'
@@ -142,6 +146,18 @@ export interface TTSModelConfig {
   providerOptions?: Record<string, unknown>;
 }
 
+export interface TTSRequestProviderOptions {
+  selectedCloneVoiceId?: string;
+  cloneVoices?: Array<{
+    id: string;
+    name: string;
+    promptText: string;
+    promptAudioPath: string;
+    createdAt: number;
+    audioSize?: number;
+  }>;
+}
+
 // ============================================================================
 // ASR (Automatic Speech Recognition) Types
 // ============================================================================
@@ -152,7 +168,12 @@ export interface TTSModelConfig {
  * Add new ASR providers here as union members.
  * Keep in sync with ASR_PROVIDERS registry in constants.ts
  */
-export type ASRProviderId = 'openai-whisper' | 'browser-native' | 'qwen-asr';
+export type BuiltInASRProviderId =
+  | 'openai-whisper'
+  | 'browser-native'
+  | 'qwen-asr'
+  | 'sensevoice-asr';
+export type ASRProviderId = BuiltInASRProviderId | (string & {});
 // Add new ASR providers below (uncomment and modify):
 // | 'elevenlabs-asr'
 // | 'assemblyai-asr'

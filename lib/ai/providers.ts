@@ -23,10 +23,8 @@
  * - https://www.volcengine.com/docs/82379/1330310
  */
 
-import { createOpenAI } from '@ai-sdk/openai';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { LanguageModel } from 'ai';
+import { stripEndpointPath, trimUrl } from '@/lib/utils/api-url';
 import type {
   ProviderId,
   ProviderConfig,
@@ -34,6 +32,10 @@ import type {
   ModelConfig,
   ThinkingConfig,
 } from '@/lib/types/provider';
+import {
+  normalizeOpenAIBaseUrlForSdk,
+  shouldUseOpenAIResponsesApi,
+} from '@/lib/ai/openai-routing';
 import { createLogger } from '@/lib/logger';
 // NOTE: Do NOT import thinking-context.ts here — it uses node:async_hooks
 // which is server-only, and this file is also used on the client via
@@ -41,6 +43,34 @@ import { createLogger } from '@/lib/logger';
 // (set by thinking-context.ts at module load time on the server).
 
 const log = createLogger('AIProviders');
+
+type OpenAIFactory = typeof import('@ai-sdk/openai').createOpenAI;
+type AnthropicFactory = typeof import('@ai-sdk/anthropic').createAnthropic;
+type GoogleFactory = typeof import('@ai-sdk/google').createGoogleGenerativeAI;
+
+function getNodeRequire(): NodeRequire {
+  // Keep AI SDK loading server-only. Client code imports this module for
+  // provider metadata, and hiding require prevents bundlers from chasing
+  // Node-only dependencies into the browser bundle.
+  return Function('return require')() as NodeRequire;
+}
+
+function loadOpenAIFactory(): OpenAIFactory {
+  const nodeRequire = getNodeRequire();
+  return (nodeRequire('@ai-sdk/openai') as typeof import('@ai-sdk/openai')).createOpenAI;
+}
+
+function loadAnthropicFactory(): AnthropicFactory {
+  const nodeRequire = getNodeRequire();
+  return (nodeRequire('@ai-sdk/anthropic') as typeof import('@ai-sdk/anthropic'))
+    .createAnthropic;
+}
+
+function loadGoogleFactory(): GoogleFactory {
+  const nodeRequire = getNodeRequire();
+  return (nodeRequire('@ai-sdk/google') as typeof import('@ai-sdk/google'))
+    .createGoogleGenerativeAI;
+}
 
 // Re-export types for backward compatibility
 export type { ProviderId, ProviderConfig, ModelInfo, ModelConfig };
@@ -1040,11 +1070,20 @@ function normalizeMiniMaxAnthropicBaseUrl(
   providerId: ProviderId,
   baseUrl?: string,
 ): string | undefined {
+  baseUrl = baseUrl?.replace(/\/models\/[^/]+:(streamGenerateContent|generateContent)$/i, '');
+  baseUrl = stripEndpointPath(baseUrl, [
+    '/chat/completions',
+    '/responses',
+    '/messages',
+    '/audio/speech',
+    '/audio/transcriptions',
+  ]);
+
   if (providerId !== 'minimax' || !baseUrl) {
     return baseUrl;
   }
 
-  const trimmed = baseUrl.replace(/\/$/, '');
+  const trimmed = trimUrl(baseUrl) || '';
   if (trimmed.endsWith('/anthropic/v1')) {
     return trimmed;
   }
@@ -1083,16 +1122,22 @@ export function getModel(config: ModelConfig): ModelWithInfo {
 
   // Resolve base URL: explicit > provider default > SDK default
   const provider = getProviderConfig(config.providerId);
+  const requestedBaseUrl = config.baseUrl || provider?.defaultBaseUrl || undefined;
   const effectiveBaseUrl = normalizeMiniMaxAnthropicBaseUrl(
     config.providerId,
-    config.baseUrl || provider?.defaultBaseUrl || undefined,
+    requestedBaseUrl,
   );
 
   let model: LanguageModel;
 
   switch (providerType) {
     case 'openai': {
-      const openaiOptions: Parameters<typeof createOpenAI>[0] = {
+      const createOpenAI = loadOpenAIFactory();
+      const openaiOptions: {
+        apiKey: string;
+        baseURL?: string;
+        fetch?: typeof fetch;
+      } = {
         apiKey: effectiveApiKey,
         baseURL: effectiveBaseUrl,
       };
@@ -1125,12 +1170,18 @@ export function getModel(config: ModelConfig): ModelWithInfo {
         };
       }
 
-      const openai = createOpenAI(openaiOptions);
-      model = openai.chat(config.modelId);
+      const openai = createOpenAI({
+        ...openaiOptions,
+        baseURL: normalizeOpenAIBaseUrlForSdk(effectiveBaseUrl),
+      });
+      model = shouldUseOpenAIResponsesApi(config.providerId, requestedBaseUrl)
+        ? openai.responses(config.modelId)
+        : openai.chat(config.modelId);
       break;
     }
 
     case 'anthropic': {
+      const createAnthropic = loadAnthropicFactory();
       const anthropic = createAnthropic({
         apiKey: effectiveApiKey,
         baseURL: effectiveBaseUrl,
@@ -1140,14 +1191,19 @@ export function getModel(config: ModelConfig): ModelWithInfo {
     }
 
     case 'google': {
-      const googleOptions: Parameters<typeof createGoogleGenerativeAI>[0] = {
+      const createGoogleGenerativeAI = loadGoogleFactory();
+      const googleOptions: {
+        apiKey: string;
+        baseURL?: string;
+        fetch?: typeof fetch;
+      } = {
         apiKey: effectiveApiKey,
         baseURL: effectiveBaseUrl,
       };
       if (config.proxy) {
         // Dynamic require to avoid bundling undici on the client side
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { ProxyAgent, fetch: undiciFetch } = require('undici');
+        const nodeRequire = getNodeRequire();
+        const { ProxyAgent, fetch: undiciFetch } = nodeRequire('undici') as typeof import('undici');
         const agent = new ProxyAgent(config.proxy);
         googleOptions.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
           undiciFetch(input as string, {

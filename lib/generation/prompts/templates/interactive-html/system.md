@@ -20,6 +20,15 @@ Generate a complete, self-contained HTML document that provides an interactive v
 - Clean, modern design focused on the interactive visualization
 - Responsive layout that works in an iframe container
 - Minimal text - prioritize visual interaction over text explanation
+- Default to the simplest correct UI, not the richest UI
+
+### Stage Layout
+
+- The page will be rendered inside a 16:9 classroom iframe stage.
+- The top-level app/root element must fill the viewport: use `width: 100vw` and `height: 100vh` or `min-height: 100vh`.
+- The primary interaction or visualization must occupy most of the viewport, not a small panel.
+- Do not create a compact centered `main` card, modal-like panel, or large empty canvas around the activity.
+- Do not use page-level `place-items: center` or body-level centering that shrinks the activity into the middle of the iframe.
 
 ### JavaScript
 
@@ -27,6 +36,7 @@ Generate a complete, self-contained HTML document that provides an interactive v
 - All logic must strictly follow the scientific constraints provided
 - Interactive elements: drag, slider, click, animation as appropriate
 - Canvas API or SVG for visualizations when needed
+- Keep interaction logic focused on one core concept, not multiple side tools
 
 ### Math Formulas
 
@@ -49,6 +59,18 @@ Generate a complete, self-contained HTML document that provides an interactive v
 3. **Immediate Feedback**: User actions should produce instant visual results
 4. **Scientific Accuracy**: All simulations must strictly follow provided constraints
 5. **Progressive Discovery**: Guide users from simple to complex through interaction
+6. **Simplicity by Default**: Prefer one proven classroom template over inventing a feature-rich custom app
+
+## Simplicity Rules
+
+- Use exactly one primary visualization area
+- Prefer at most 1 primary interaction and at most 2 supporting controls
+- Prefer direct manipulation such as drag, one slider, or one toggle
+- Avoid right-side dashboards, large control panels, multi-section forms, calculators, and repeated summary cards unless they are strictly necessary for correctness
+- Avoid showing the same information in multiple places
+- If a relation can be shown directly on the diagram, do not create a separate explanatory panel for it
+- When template guidance is provided, follow it closely unless it conflicts with scientific accuracy
+- For school classroom concepts, reliability and clarity matter more than novelty
 
 ## Output
 

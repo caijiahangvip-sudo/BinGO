@@ -5,10 +5,18 @@ import { debounce } from 'lodash';
 import { useCanvasStore } from '@/lib/store';
 import { useHistorySnapshot } from '@/lib/hooks/use-history-snapshot';
 import type { PPTTextElement } from '@/lib/types/slides';
+import { resolveScreenFontFamily } from '@/lib/constants/fonts';
 import { useElementShadow } from '../hooks/useElementShadow';
 import { ElementOutline } from '../ElementOutline';
 import { ProsemirrorEditor } from '../ProsemirrorEditor';
 import { useCanvasOperations } from '@/lib/hooks/use-canvas-operations';
+import { AutoFitTextBox } from '../AutoFitTextBox';
+import {
+  hasCenteredTextAlign,
+  hasExplicitTextAlign,
+  hasVisibleTextBoxFill,
+  shouldAutoCenterBoxText,
+} from '@/lib/utils/text-box-alignment';
 
 export interface TextElementProps {
   elementInfo: PPTTextElement;
@@ -30,6 +38,18 @@ export function TextElement({ elementInfo, selectElement }: TextElementProps) {
   const { addHistorySnapshot } = useHistorySnapshot();
 
   const { shadowStyle } = useElementShadow(elementInfo.shadow);
+  const hasFilledBackground = hasVisibleTextBoxFill(elementInfo.fill);
+  const canAutoCenterText =
+    !hasExplicitTextAlign(elementInfo.content) || hasCenteredTextAlign(elementInfo.content);
+  const isCenterableShortText = shouldAutoCenterBoxText({
+    html: elementInfo.content,
+    boxWidth: elementInfo.width,
+    boxHeight: elementInfo.height,
+  });
+  const shouldForceCenterText =
+    canAutoCenterText &&
+    (hasFilledBackground || hasCenteredTextAlign(elementInfo.content)) &&
+    isCenterableShortText;
 
   const elementRef = useRef<HTMLDivElement>(null);
   const [realHeightCache, setRealHeightCache] = useState(-1);
@@ -163,6 +183,18 @@ export function TextElement({ elementInfo, selectElement }: TextElementProps) {
     }
   }, [isHandleElement, checkEmptyText]);
 
+  const textEditor = (
+    <ProsemirrorEditor
+      elementId={elementInfo.id}
+      defaultColor={elementInfo.defaultColor}
+      defaultFontName={elementInfo.defaultFontName}
+      editable={!elementInfo.lock}
+      value={elementInfo.content}
+      onUpdate={({ value, ignore }) => updateContent(value, ignore)}
+      onMouseDown={(e) => handleSelectElement(e as React.MouseEvent, false)}
+    />
+  );
+
   return (
     <div
       className={`editable-element-text absolute ${elementInfo.lock ? 'lock' : ''}`}
@@ -179,17 +211,20 @@ export function TextElement({ elementInfo, selectElement }: TextElementProps) {
       >
         <div
           ref={elementRef}
-          className={`element-content relative p-[10px] leading-[1.5] break-words ${elementInfo.lock ? 'cursor-default' : 'cursor-move'}`}
+          className={`element-content relative p-[10px] leading-[1.5] break-words ${
+            isHandleElement ? '' : 'h-full w-full overflow-hidden'
+          } ${elementInfo.lock ? 'cursor-default' : 'cursor-move'}`}
           style={{
-            width: elementInfo.vertical ? 'auto' : `${elementInfo.width}px`,
-            height: elementInfo.vertical ? `${elementInfo.height}px` : 'auto',
+            width: isHandleElement && !elementInfo.vertical ? `${elementInfo.width}px` : undefined,
+            height: isHandleElement && elementInfo.vertical ? `${elementInfo.height}px` : undefined,
             backgroundColor: elementInfo.fill,
+            borderRadius: hasFilledBackground ? '6px' : undefined,
             opacity: elementInfo.opacity,
             textShadow: shadowStyle,
             lineHeight: elementInfo.lineHeight,
             letterSpacing: `${elementInfo.wordSpace || 0}px`,
             color: elementInfo.defaultColor,
-            fontFamily: elementInfo.defaultFontName,
+            fontFamily: resolveScreenFontFamily(elementInfo.defaultFontName),
             writingMode: elementInfo.vertical ? 'vertical-rl' : 'horizontal-tb',
             // @ts-expect-error - CSS custom property
             '--paragraphSpace': `${elementInfo.paragraphSpace === undefined ? 5 : elementInfo.paragraphSpace}px`,
@@ -203,17 +238,20 @@ export function TextElement({ elementInfo, selectElement }: TextElementProps) {
             outline={elementInfo.outline}
           />
 
-          <div className="text relative">
-            <ProsemirrorEditor
-              elementId={elementInfo.id}
-              defaultColor={elementInfo.defaultColor}
-              defaultFontName={elementInfo.defaultFontName}
-              editable={!elementInfo.lock}
-              value={elementInfo.content}
-              onUpdate={({ value, ignore }) => updateContent(value, ignore)}
-              onMouseDown={(e) => handleSelectElement(e as React.MouseEvent, false)}
-            />
-          </div>
+          {isHandleElement ? (
+            <div className="text relative">{textEditor}</div>
+          ) : (
+            <AutoFitTextBox
+              className="text"
+              contentClassName="[&_p]:m-0 [&_p+_p]:mt-[var(--paragraphSpace)] [&_ol]:my-0 [&_ul]:my-0 [&_li]:my-0"
+              verticalAlign={shouldForceCenterText ? 'middle' : 'top'}
+              style={{
+                textAlign: shouldForceCenterText ? 'center' : undefined,
+              }}
+            >
+              {textEditor}
+            </AutoFitTextBox>
+          )}
 
           {/* Drag handlers for better interaction when text overflows */}
           <div className="drag-handler top absolute left-0 right-0 h-[10px] top-0" />

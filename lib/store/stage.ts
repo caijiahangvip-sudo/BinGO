@@ -4,11 +4,37 @@ import { createSelectors } from '@/lib/utils/create-selectors';
 import type { ChatSession } from '@/lib/types/chat';
 import type { SceneOutline } from '@/lib/types/generation';
 import { createLogger } from '@/lib/logger';
+import { repairTriadDiagramAlignment } from '@/lib/utils/slide-element-layout';
 
 const log = createLogger('StageStore');
 
 /** Virtual scene ID used when the user navigates to a page still being generated */
 export const PENDING_SCENE_ID = '__pending__';
+
+function repairStoredSceneTriadDiagrams(scenes: Scene[]): { scenes: Scene[]; changed: boolean } {
+  let changed = false;
+  const repairedScenes = scenes.map((scene) => {
+    if (scene.type !== 'slide' || scene.content.type !== 'slide') return scene;
+
+    const elements = scene.content.canvas.elements;
+    const repairedElements = repairTriadDiagramAlignment(elements);
+    if (repairedElements === elements) return scene;
+
+    changed = true;
+    return {
+      ...scene,
+      content: {
+        ...scene.content,
+        canvas: {
+          ...scene.content.canvas,
+          elements: repairedElements,
+        },
+      },
+    };
+  });
+
+  return changed ? { scenes: repairedScenes, changed } : { scenes, changed };
+}
 
 // ==================== Debounce Helper ====================
 
@@ -273,6 +299,12 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       // (e.g. navigated from generation-preview with fresh in-memory data)
       const currentState = get();
       if (currentState.stage?.id === stageId && currentState.scenes.length > 0) {
+        const repaired = repairStoredSceneTriadDiagrams(currentState.scenes);
+        if (repaired.changed) {
+          set({ scenes: repaired.scenes });
+          await get().saveToStorage();
+          log.info('Repaired in-memory triad diagram layout:', stageId);
+        }
         log.info('Stage already loaded in memory, skipping IndexedDB load:', stageId);
         return;
       }
@@ -286,15 +318,22 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       const outlines = outlinesRecord?.outlines || [];
 
       if (data) {
+        const repaired = repairStoredSceneTriadDiagrams(data.scenes);
         set({
           stage: data.stage,
-          scenes: data.scenes,
+          scenes: repaired.scenes,
           currentSceneId: data.currentSceneId,
           chats: data.chats,
           outlines,
           // Compute generatingOutlines from persisted outlines minus completed scenes
-          generatingOutlines: outlines.filter((o) => !data.scenes.some((s) => s.order === o.order)),
+          generatingOutlines: outlines.filter(
+            (o) => !repaired.scenes.some((s) => s.order === o.order),
+          ),
         });
+        if (repaired.changed) {
+          await get().saveToStorage();
+          log.info('Repaired stored triad diagram layout:', stageId);
+        }
         log.info('Loaded from storage:', stageId);
       } else {
         log.warn('No data found for stage:', stageId);

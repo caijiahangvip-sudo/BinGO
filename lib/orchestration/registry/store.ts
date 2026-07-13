@@ -39,6 +39,7 @@ const WHITEBOARD_ACTIONS = [
 ];
 
 const SLIDE_ACTIONS = ['spotlight', 'laser', 'play_video'];
+const CONSTRUCTIVE_ACTIONS = ['wait_for_user_teaching'];
 
 // Default agents - always available on both server and client
 const DEFAULT_AGENTS: Record<string, AgentConfig> = {
@@ -60,7 +61,7 @@ You can spotlight or laser-point at slide elements, and use the whiteboard for h
 Tone: Professional yet approachable. Patient. Encouraging. You genuinely care about whether students understand.`,
     avatar: '/avatars/teacher.png',
     color: '#3b82f6',
-    allowedActions: [...SLIDE_ACTIONS, ...WHITEBOARD_ACTIONS],
+    allowedActions: [...SLIDE_ACTIONS, ...WHITEBOARD_ACTIONS, ...CONSTRUCTIVE_ACTIONS],
     priority: 10,
     createdAt: new Date(),
     updatedAt: new Date(),

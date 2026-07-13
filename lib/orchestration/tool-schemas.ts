@@ -5,7 +5,7 @@
  * Actions are parsed from JSON array items in the model's response.
  */
 
-import { SLIDE_ONLY_ACTIONS } from '@/lib/types/action';
+import { SAFETY_ACTIONS, SLIDE_ONLY_ACTIONS } from '@/lib/types/action';
 
 // ==================== Effective Actions ====================
 
@@ -14,9 +14,18 @@ import { SLIDE_ONLY_ACTIONS } from '@/lib/types/action';
  * Slide-only actions (spotlight, laser) are removed for non-slide scenes.
  */
 export function getEffectiveActions(allowedActions: string[], sceneType?: string): string[] {
-  if (!sceneType || sceneType === 'slide') return allowedActions;
-  return allowedActions.filter(
-    (a) => !SLIDE_ONLY_ACTIONS.includes(a as (typeof SLIDE_ONLY_ACTIONS)[number]),
+  const filteredActions =
+    !sceneType || sceneType === 'slide'
+      ? allowedActions
+      : allowedActions.filter(
+          (a) => !SLIDE_ONLY_ACTIONS.includes(a as (typeof SLIDE_ONLY_ACTIONS)[number]),
+        );
+
+  return Array.from(
+    new Set([
+      ...filteredActions,
+      ...SAFETY_ACTIONS.filter((action) => !filteredActions.includes(action)),
+    ]),
   );
 }
 
@@ -29,7 +38,7 @@ export function getEffectiveActions(allowedActions: string[], sceneType?: string
 export function getActionDescriptions(allowedActions: string[]): string {
   const descriptions: Record<string, string> = {
     spotlight:
-      'Focus attention on a single key element by dimming everything else. Use sparingly — max 1-2 per response. Parameters: { elementId: string, dimOpacity?: number }',
+      'Focus attention on a single key element with a light dim layer while keeping the page readable. Use sparingly — max 1-2 per response. Parameters: { elementId: string, dimOpacity?: number }. Recommended dimOpacity: 0.2-0.32, never above 0.42.',
     laser:
       'Point at an element with a laser pointer effect. Parameters: { elementId: string, color?: string }',
     wb_open:
@@ -52,6 +61,10 @@ export function getActionDescriptions(allowedActions: string[]): string {
       'Delete a specific element from the whiteboard by its ID. Use to remove an outdated, incorrect, or overlapping element without clearing the entire board. Parameters: { elementId: string }',
     wb_close:
       'Close the whiteboard and return to the slide view. Always close after you finish drawing. Parameters: {}',
+    wait_for_user_teaching:
+      'Pause the lesson and invite the student to teach back on the whiteboard. The runtime unlocks student whiteboard editing and waits until the student both edits the whiteboard and sends an explanation. Use for Feynman-style constructivist checks, not routine questions. Parameters: { prompt?: string }',
+    request_clarification:
+      'Ask the student for an additional explanation when the whiteboard snapshot is visually ambiguous or your confidence is low. This is a safety fallback, not a normal teaching action. Parameters: { message?: string, reason?: string, visionConfidence?: number }. Use this instead of judging or correcting the student when visionConfidence < 0.7.',
     play_video:
       'Start playback of a video element on the current slide. Synchronous — blocks until the video finishes playing. Use a speech action before this to introduce the video. Parameters: { elementId: string }',
   };

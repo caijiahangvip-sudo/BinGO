@@ -52,6 +52,9 @@ export function SessionList({
       {sessions.map((session) => {
         const isExpanded = expandedSessionIds.has(session.id);
         const isActive = session.status === 'active';
+        const visibleMessageCount = session.messages.filter(
+          (message) => !message.metadata?.hidden,
+        ).length;
         const dotColor =
           session.type === 'lecture'
             ? 'bg-purple-500'
@@ -100,7 +103,7 @@ export function SessionList({
                 {getStatusIcon(session.status)}
               </div>
               <span className="text-[9px] text-gray-400 dark:text-gray-500 font-medium tabular-nums shrink-0">
-                {session.messages.length}
+                {visibleMessageCount}
               </span>
               <ChevronDown
                 className={cn(

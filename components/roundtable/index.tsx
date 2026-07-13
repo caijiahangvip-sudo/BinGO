@@ -32,11 +32,16 @@ import { DEFAULT_TEACHER_AVATAR, DEFAULT_USER_AVATAR } from '@/components/roundt
 import type { DiscussionAction } from '@/lib/types/action';
 import type { EngineMode, PlaybackView } from '@/lib/playback';
 import type { Participant } from '@/lib/types/roundtable';
+import type { DebateConfig, DiscussionMode } from '@/lib/types/chat';
 
 export interface DiscussionRequest {
   topic: string;
   prompt?: string;
   agentId?: string; // Agent ID to initiate discussion (default: 'default-1')
+  autoEndPolicy?: 'quiz_pass';
+  studentQuestion?: string;
+  discussionMode?: DiscussionMode;
+  debateConfig?: DebateConfig;
 }
 
 interface RoundtableProps {
@@ -59,6 +64,7 @@ interface RoundtableProps {
   readonly endFlashSessionType?: 'qa' | 'discussion';
   readonly thinkingState?: { stage: string; agentId?: string } | null;
   readonly isCueUser?: boolean;
+  readonly cueUserPrompt?: string | null;
   readonly isTopicPending?: boolean;
   readonly onMessageSend?: (message: string) => void;
   readonly onDiscussionStart?: (request: DiscussionAction) => void;
@@ -147,6 +153,7 @@ export function Roundtable({
   endFlashSessionType = 'discussion',
   thinkingState,
   isCueUser,
+  cueUserPrompt,
   isTopicPending,
   onMessageSend,
   onDiscussionStart,
@@ -366,7 +373,7 @@ export function Roundtable({
     setIsInputOpen(false);
   };
 
-  const handleToggleInput = () => {
+  const handleToggleInput = useCallback(() => {
     if (isSendCooldown) return;
     if (!isInputOpen) {
       onInputActivate?.();
@@ -377,9 +384,9 @@ export function Roundtable({
       cancelRecording();
       setIsVoiceOpen(false);
     }
-  };
+  }, [cancelRecording, isInputOpen, isProcessing, isSendCooldown, isVoiceOpen, onInputActivate]);
 
-  const handleToggleVoice = () => {
+  const handleToggleVoice = useCallback(() => {
     if (isVoiceOpen) {
       if (isRecording) {
         stopRecording();
@@ -392,7 +399,15 @@ export function Roundtable({
       setIsInputOpen(false);
       startRecording();
     }
-  };
+  }, [
+    isProcessing,
+    isRecording,
+    isSendCooldown,
+    isVoiceOpen,
+    onInputActivate,
+    startRecording,
+    stopRecording,
+  ]);
 
   // Keyboard shortcuts for roundtable interaction (#255)
   // T = toggle text input, V = toggle voice input, Escape = dismiss panels,
@@ -462,6 +477,9 @@ export function Roundtable({
     isVoiceOpen,
     isRecording,
     isProcessing,
+    cancelRecording,
+    handleToggleInput,
+    handleToggleVoice,
   ]);
 
   const isPresentationInteractionActive = isInputOpen || isVoiceOpen || isRecording || isProcessing;
@@ -827,7 +845,7 @@ export function Roundtable({
                   className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/70 dark:bg-black/50 backdrop-blur-xl border border-amber-400/50 dark:border-amber-500/50 shadow-[0_0_16px_rgba(245,158,11,0.2),0_8px_32px_rgba(0,0,0,0.06)] dark:shadow-[0_0_16px_rgba(245,158,11,0.25),0_8px_32px_rgba(0,0,0,0.4)] text-amber-600 dark:text-amber-400 text-sm font-semibold tracking-wide hover:bg-gray-100/80 dark:hover:bg-black/60 hover:border-amber-500/70 dark:hover:border-amber-400/70 hover:shadow-[0_0_24px_rgba(245,158,11,0.25)] dark:hover:shadow-[0_0_24px_rgba(245,158,11,0.35)] transition-all active:scale-95 animate-pulse"
                 >
                   {asrEnabled ? <Mic className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />}
-                  {t('roundtable.yourTurn')}
+                  <span className="max-w-[360px] truncate">{t('roundtable.yourTurn')}</span>
                 </button>
               </motion.div>
             )}
@@ -2080,7 +2098,7 @@ export function Roundtable({
                     exit={{ opacity: 0, y: 4, scale: 0.9 }}
                     className="absolute -bottom-2 left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 bg-amber-500 text-white text-[9px] font-bold rounded-full shadow-sm z-30"
                   >
-                    {t('roundtable.yourTurn')}
+                    {cueUserPrompt || t('roundtable.yourTurn')}
                   </motion.div>
                 )}
               </AnimatePresence>

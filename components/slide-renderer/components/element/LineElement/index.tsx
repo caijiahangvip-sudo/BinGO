@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useId, useMemo } from 'react';
 import type { PPTLineElement } from '@/lib/types/slides';
-import { getLineElementPath } from '@/lib/utils/element';
+import { getLineRenderGeometry } from '@/lib/utils/line-geometry';
 import { useElementShadow } from '../hooks/useElementShadow';
 import { LinePointMarker } from './LinePointMarker';
 
@@ -13,29 +13,27 @@ export interface LineElementProps {
   selectElement?: (e: React.MouseEvent | React.TouchEvent, element: PPTLineElement) => void;
 }
 
+function safeSvgIdSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
 /**
  * Line element component
  * Renders SVG lines with optional arrow/dot endpoints
  */
 export function LineElement({ elementInfo, selectElement }: LineElementProps) {
   const { shadowStyle } = useElementShadow(elementInfo.shadow);
+  const reactId = useId();
+  const markerId = useMemo(
+    () => `${safeSvgIdSegment(elementInfo.id)}-${safeSvgIdSegment(reactId)}`,
+    [elementInfo.id, reactId],
+  );
 
   const handleSelectElement = (e: React.MouseEvent | React.TouchEvent) => {
     if (elementInfo.lock) return;
     e.stopPropagation();
     selectElement?.(e, elementInfo);
   };
-
-  // Calculate SVG dimensions
-  const svgWidth = useMemo(() => {
-    const width = Math.abs(elementInfo.start[0] - elementInfo.end[0]);
-    return width < 24 ? 24 : width;
-  }, [elementInfo.start, elementInfo.end]);
-
-  const svgHeight = useMemo(() => {
-    const height = Math.abs(elementInfo.start[1] - elementInfo.end[1]);
-    return height < 24 ? 24 : height;
-  }, [elementInfo.start, elementInfo.end]);
 
   // Calculate line dash array for dashed/dotted styles
   const lineDashArray = useMemo(() => {
@@ -49,10 +47,7 @@ export function LineElement({ elementInfo, selectElement }: LineElementProps) {
     return '0 0';
   }, [elementInfo.width, elementInfo.style]);
 
-  // Generate path data
-  const path = useMemo(() => {
-    return getLineElementPath(elementInfo);
-  }, [elementInfo]);
+  const geometry = useMemo(() => getLineRenderGeometry(elementInfo), [elementInfo]);
 
   return (
     <div
@@ -72,14 +67,19 @@ export function LineElement({ elementInfo, selectElement }: LineElementProps) {
       >
         <svg
           overflow="visible"
-          width={svgWidth}
-          height={svgHeight}
-          className="transform-origin-[0_0]"
+          width={geometry.width}
+          height={geometry.height}
+          viewBox={geometry.viewBox}
+          className="absolute transform-origin-[0_0] overflow-visible"
+          style={{
+            left: `${geometry.left}px`,
+            top: `${geometry.top}px`,
+          }}
         >
           <defs>
             {elementInfo.points[0] && (
               <LinePointMarker
-                id={elementInfo.id}
+                id={markerId}
                 position="start"
                 type={elementInfo.points[0]}
                 color={elementInfo.color}
@@ -88,7 +88,7 @@ export function LineElement({ elementInfo, selectElement }: LineElementProps) {
             )}
             {elementInfo.points[1] && (
               <LinePointMarker
-                id={elementInfo.id}
+                id={markerId}
                 position="end"
                 type={elementInfo.points[1]}
                 color={elementInfo.color}
@@ -99,22 +99,22 @@ export function LineElement({ elementInfo, selectElement }: LineElementProps) {
           {/* Visible line */}
           <path
             className={`line-point pointer-events-auto ${elementInfo.lock ? 'cursor-default' : 'cursor-move'}`}
-            d={path}
+            d={geometry.path}
             stroke={elementInfo.color}
             strokeWidth={elementInfo.width}
             strokeDasharray={lineDashArray}
             fill="none"
             markerStart={
-              elementInfo.points[0] ? `url(#${elementInfo.id}-${elementInfo.points[0]}-start)` : ''
+              elementInfo.points[0] ? `url(#${markerId}-${elementInfo.points[0]}-start)` : ''
             }
             markerEnd={
-              elementInfo.points[1] ? `url(#${elementInfo.id}-${elementInfo.points[1]}-end)` : ''
+              elementInfo.points[1] ? `url(#${markerId}-${elementInfo.points[1]}-end)` : ''
             }
           />
           {/* Invisible wider path for easier clicking */}
           <path
             className={`line-path pointer-events-auto ${elementInfo.lock ? 'cursor-default' : 'cursor-move'}`}
-            d={path}
+            d={geometry.path}
             stroke="transparent"
             strokeWidth="20"
             fill="none"

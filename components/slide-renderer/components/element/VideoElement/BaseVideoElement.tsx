@@ -5,10 +5,8 @@ import { useAnimate } from 'motion/react';
 import type { PPTVideoElement } from '@/lib/types/slides';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useMediaGenerationStore, isMediaPlaceholder } from '@/lib/store/media-generation';
-import { useSettingsStore } from '@/lib/store/settings';
 import { useMediaStageId } from '@/lib/contexts/media-stage-context';
-import { retryMediaTask } from '@/lib/media/media-orchestrator';
-import { RotateCcw, Film, ShieldAlert, VideoOff } from 'lucide-react';
+import { Film, ShieldAlert, VideoOff } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { createLogger } from '@/lib/logger';
 
@@ -39,9 +37,8 @@ export function BaseVideoElement({ elementInfo }: BaseVideoElementProps) {
     if (t && t.stageId !== stageId) return undefined;
     return t;
   });
-  const videoGenerationEnabled = useSettingsStore((s) => s.videoGenerationEnabled);
   const resolvedSrc = task?.status === 'done' && task.objectUrl ? task.objectUrl : elementInfo.src;
-  const showDisabled = isPlaceholder && !task && !videoGenerationEnabled;
+  const showDisabled = isPlaceholder && !task;
   const showSkeleton =
     isPlaceholder &&
     !showDisabled &&
@@ -146,17 +143,10 @@ export function BaseVideoElement({ elementInfo }: BaseVideoElementProps) {
                 <span>{t('settings.mediaGenerationDisabled')}</span>
               </div>
             ) : (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  retryMediaTask(elementInfo.src);
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="flex items-center gap-1 px-2 py-1 text-[10px] font-medium text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/40 rounded hover:bg-red-200 dark:hover:bg-red-900/60 transition-colors"
-              >
-                <RotateCcw className="w-3 h-3" />
-                {t('settings.mediaRetry')}
-              </button>
+              <div className="flex items-center gap-1 px-2 py-1 text-[10px] font-medium text-gray-500 dark:text-gray-400">
+                <VideoOff className="w-3 h-3 shrink-0" />
+                <span>{t('settings.mediaGenerationDisabled')}</span>
+              </div>
             )}
           </div>
         ) : (isReady && resolvedSrc && !isPlaceholder) ||

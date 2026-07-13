@@ -26,6 +26,10 @@ import type { SpeechAction } from '@/lib/types/action';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
+import {
+  resolveColorThemeId,
+  type ColorThemeId,
+} from '@/lib/theme/color-themes';
 
 const log = createLogger('Scene Actions API');
 
@@ -34,6 +38,19 @@ export const maxDuration = 60;
 export async function POST(req: NextRequest) {
   let outlineTitle: string | undefined;
   let resolvedModelString: string | undefined;
+  let fallbackOutline: SceneOutline | undefined;
+  let fallbackAllOutlines: SceneOutline[] | undefined;
+  let fallbackContent:
+    | GeneratedSlideContent
+    | GeneratedQuizContent
+    | GeneratedInteractiveContent
+    | GeneratedPBLContent
+    | undefined;
+  let fallbackStageId: string | undefined;
+  let fallbackAgents: AgentInfo[] | undefined;
+  let fallbackPreviousSpeeches: string[] | undefined;
+  let fallbackUserProfile: string | undefined;
+  let fallbackVisualTheme: ColorThemeId | undefined;
   try {
     const body = await req.json();
     const {
@@ -44,6 +61,7 @@ export async function POST(req: NextRequest) {
       agents,
       previousSpeeches: incomingPreviousSpeeches,
       userProfile,
+      visualTheme: rawVisualTheme,
     } = body as {
       outline: SceneOutline;
       allOutlines: SceneOutline[];
@@ -56,6 +74,7 @@ export async function POST(req: NextRequest) {
       agents?: AgentInfo[];
       previousSpeeches?: string[];
       userProfile?: string;
+      visualTheme?: ColorThemeId;
     };
 
     // Validate required fields
@@ -76,9 +95,19 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'stageId is required');
     }
 
+    outlineTitle = outline?.title;
+    fallbackOutline = outline;
+    fallbackAllOutlines = allOutlines;
+    fallbackContent = content;
+    fallbackStageId = stageId;
+    fallbackAgents = agents;
+    fallbackPreviousSpeeches = incomingPreviousSpeeches;
+    fallbackUserProfile = userProfile;
+    const visualTheme = resolveColorThemeId(rawVisualTheme);
+    fallbackVisualTheme = visualTheme;
+
     // ── Model resolution from request headers ──
     const { model: languageModel, modelInfo, modelString } = resolveModelFromHeaders(req);
-    outlineTitle = outline?.title;
     resolvedModelString = modelString;
 
     // Detect vision capability
@@ -137,7 +166,7 @@ export async function POST(req: NextRequest) {
     log.info(`Generated ${actions.length} actions for: "${outline.title}"`);
 
     // ── Build complete scene ──
-    const scene = buildCompleteScene(outline, content, actions, stageId);
+    const scene = buildCompleteScene(outline, content, actions, stageId, visualTheme);
 
     if (!scene) {
       log.error(`Failed to build scene: "${outline.title}"`);
@@ -156,6 +185,64 @@ export async function POST(req: NextRequest) {
 
     return apiSuccess({ scene, previousSpeeches: outputPreviousSpeeches });
   } catch (error) {
+    if (fallbackOutline && fallbackAllOutlines && fallbackContent && fallbackStageId) {
+      try {
+        const outlineForFallback = fallbackOutline;
+        const allOutlinesForFallback = fallbackAllOutlines;
+        const contentForFallback = fallbackContent;
+        const stageIdForFallback = fallbackStageId;
+        const allTitles = allOutlinesForFallback.map((o) => o.title);
+        const pageIndex = allOutlinesForFallback.findIndex((o) => o.id === outlineForFallback.id);
+        const fallbackCtx: SceneGenerationContext = {
+          pageIndex: (pageIndex >= 0 ? pageIndex : 0) + 1,
+          totalPages: allOutlinesForFallback.length,
+          allTitles,
+          previousSpeeches: fallbackPreviousSpeeches ?? [],
+        };
+        const failedAiCall = async (): Promise<string> => {
+          throw error instanceof Error ? error : new Error(String(error));
+        };
+        const actions = await generateSceneActions(
+          outlineForFallback,
+          contentForFallback,
+          failedAiCall,
+          fallbackCtx,
+          fallbackAgents,
+          fallbackUserProfile,
+        );
+        const scene = buildCompleteScene(
+          outlineForFallback,
+          contentForFallback,
+          actions,
+          stageIdForFallback,
+          fallbackVisualTheme,
+        );
+
+        if (scene) {
+          const outputPreviousSpeeches = (scene.actions || [])
+            .filter((a): a is SpeechAction => a.type === 'speech')
+            .map((a) => a.text);
+
+          log.warn(
+            `Scene actions generation failed for "${outlineForFallback.title}", returning fallback actions: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+
+          return apiSuccess({
+            scene,
+            previousSpeeches: outputPreviousSpeeches,
+            warning: 'SCENE_ACTIONS_FALLBACK',
+          });
+        }
+      } catch (fallbackError) {
+        log.error(
+          `Fallback actions assembly failed for "${fallbackOutline?.title ?? 'unknown'}":`,
+          fallbackError,
+        );
+      }
+    }
+
     log.error(
       `Scene actions generation failed [scene="${outlineTitle ?? 'unknown'}", model=${resolvedModelString ?? 'unknown'}]:`,
       error,

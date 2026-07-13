@@ -1,22 +1,25 @@
 import { apiSuccess } from '@/lib/server/api-response';
 import {
+  getServerVectorProviders,
   getServerWebSearchProviders,
-  getServerImageProviders,
-  getServerVideoProviders,
   getServerTTSProviders,
 } from '@/lib/server/provider-config';
 
-const version = process.env.npm_package_version || '0.1.0';
+import packageJson from '@/package.json';
+
+const version = process.env.npm_package_version || packageJson.version;
+const startedAt = new Date().toISOString();
 
 export async function GET() {
   return apiSuccess({
     status: 'ok',
     version,
+    desktop: process.env.BINGO_DESKTOP === '1',
+    startedAt,
     capabilities: {
       webSearch: Object.keys(getServerWebSearchProviders()).length > 0,
-      imageGeneration: Object.keys(getServerImageProviders()).length > 0,
-      videoGeneration: Object.keys(getServerVideoProviders()).length > 0,
       tts: Object.keys(getServerTTSProviders()).length > 0,
+      vector: Object.keys(getServerVectorProviders()).length > 0,
     },
   });
 }

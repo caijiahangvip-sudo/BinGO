@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import {
   Loader2,
+  Check,
   CheckCircle2,
   XCircle,
   Eye,
@@ -50,6 +51,9 @@ interface ProviderConfigPanelProps {
   onAddModel: () => void;
   onResetToDefault?: () => void; // Reset provider to default configuration
   isBuiltIn: boolean; // To determine if reset button should be shown
+  activeProviderId: string;
+  activeModelId: string;
+  onSelectModel: (modelId: string) => void;
 }
 
 export function ProviderConfigPanel({
@@ -65,6 +69,9 @@ export function ProviderConfigPanel({
   onAddModel,
   onResetToDefault,
   isBuiltIn,
+  activeProviderId,
+  activeModelId,
+  onSelectModel,
 }: ProviderConfigPanelProps) {
   const { t } = useI18n();
 
@@ -91,19 +98,36 @@ export function ProviderConfigPanel({
     setTestMessage('');
   }, [provider.id, initialApiKey, initialBaseUrl, initialRequiresApiKey]);
 
+  useEffect(() => {
+    if (activeProviderId === provider.id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Clear stale result when the tested model changes
+      setTestStatus('idle');
+
+      setTestMessage('');
+    }
+  }, [activeModelId, activeProviderId, provider.id]);
+
+  const clearTestResult = () => {
+    setTestStatus('idle');
+    setTestMessage('');
+  };
+
   // Notify parent of changes
   const handleApiKeyChange = (key: string) => {
     setApiKey(key);
+    clearTestResult();
     onConfigChange(key, baseUrl, requiresApiKey);
   };
 
   const handleBaseUrlChange = (url: string) => {
     setBaseUrl(url);
+    clearTestResult();
     onConfigChange(apiKey, url, requiresApiKey);
   };
 
   const handleRequiresApiKeyChange = (requires: boolean) => {
     setRequiresApiKey(requires);
+    clearTestResult();
     onConfigChange(apiKey, baseUrl, requires);
   };
 
@@ -119,7 +143,10 @@ export function ProviderConfigPanel({
       return;
     }
 
-    const testModelId = availableModels[0].id;
+    const testModelId =
+      activeProviderId === provider.id && activeModelId
+        ? activeModelId
+        : availableModels[0].id;
 
     try {
       const response = await fetch('/api/verify-model', {
@@ -138,7 +165,7 @@ export function ProviderConfigPanel({
 
       if (data.success) {
         setTestStatus('success');
-        setTestMessage(t('settings.connectionSuccess'));
+        setTestMessage(data.message || t('settings.connectionSuccess'));
       } else {
         setTestStatus('error');
         setTestMessage(data.error || t('settings.connectionFailed'));
@@ -147,7 +174,17 @@ export function ProviderConfigPanel({
       setTestStatus('error');
       setTestMessage(t('settings.connectionFailed'));
     }
-  }, [apiKey, baseUrl, provider.id, provider.type, requiresApiKey, providersConfig, t]);
+  }, [
+    activeModelId,
+    activeProviderId,
+    apiKey,
+    baseUrl,
+    provider.id,
+    provider.type,
+    requiresApiKey,
+    providersConfig,
+    t,
+  ]);
 
   const models = providersConfig[provider.id]?.models || [];
   const isServerConfigured = providersConfig[provider.id]?.isServerConfigured;
@@ -257,37 +294,9 @@ export function ProviderConfigPanel({
           onBlur={onSave}
           className="h-8"
         />
-        {(() => {
-          const effectiveBaseUrl = baseUrl || provider.defaultBaseUrl || '';
-          if (!effectiveBaseUrl) return null;
-
-          // Generate endpoint path based on provider type
-          let endpointPath = '';
-          switch (provider.type) {
-            case 'openai':
-              endpointPath = '/chat/completions';
-              break;
-            case 'anthropic':
-              endpointPath = '/messages';
-              break;
-            case 'google':
-              endpointPath = '/models/[model]';
-              break;
-            default:
-              endpointPath = '';
-          }
-
-          const fullUrl = effectiveBaseUrl + endpointPath;
-
-          return (
-            <p className="text-xs text-muted-foreground break-all">
-              {t('settings.requestUrl')}: {fullUrl}
-            </p>
-          );
-        })()}
       </div>
 
-      {/* Models - No selection state, just list for management */}
+      {/* Models */}
       <div className="space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <Label className="text-base">{t('settings.models')}</Label>
@@ -313,13 +322,26 @@ export function ProviderConfigPanel({
 
         <div className="space-y-1.5">
           {models.map((model, index) => {
+            const isActiveModel = activeProviderId === provider.id && activeModelId === model.id;
+
             return (
               <div
                 key={model.id}
-                className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card"
+                className={cn(
+                  'flex items-center justify-between p-3 rounded-lg border bg-card transition-colors',
+                  isActiveModel ? 'border-primary/50 bg-primary/5' : 'border-border/50',
+                )}
               >
                 <div className="flex-1">
-                  <div className="font-mono text-sm font-medium mb-1.5">{model.name}</div>
+                  <div className="flex items-center gap-2 mb-1.5 min-w-0">
+                    <div className="font-mono text-sm font-medium truncate">{model.name}</div>
+                    {isActiveModel && (
+                      <span className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 text-[11px] font-medium text-primary">
+                        <Check className="h-3 w-3" />
+                        {t('settings.currentlyUsing')}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     {/* Capabilities */}
                     <div className="flex items-center gap-1">
@@ -362,6 +384,18 @@ export function ProviderConfigPanel({
 
                 {/* Edit/Delete Buttons */}
                 <div className="flex items-center gap-1">
+                  {!isActiveModel && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => onSelectModel(model.id)}
+                      title={t('settings.selectModel')}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      <span className="ml-1.5">{t('settings.selectModel')}</span>
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"

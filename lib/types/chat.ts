@@ -10,6 +10,23 @@ import type { UIMessage } from 'ai';
 // Session Types
 export type SessionType = 'qa' | 'discussion' | 'lecture';
 export type SessionStatus = 'idle' | 'active' | 'interrupted' | 'completed';
+export type AutoEndPolicy = 'quiz_pass';
+export type DiscussionMode = 'standard' | 'debate';
+
+export interface DebateConfig {
+  agentAId: string;
+  agentBId: string;
+  topic?: string;
+  agentAPersona?: string;
+  agentBPersona?: string;
+}
+
+export interface DebateState {
+  phase: 'agent_a' | 'agent_b' | 'user' | 'done';
+  agentAId: string;
+  agentBId: string;
+  topic?: string;
+}
 
 /**
  * Metadata attached to chat messages
@@ -23,6 +40,7 @@ export interface ChatMessageMetadata {
   agentColor?: string;
   createdAt?: number;
   interrupted?: boolean;
+  hidden?: boolean;
 }
 
 /**
@@ -51,6 +69,7 @@ export interface ChatSession {
   updatedAt: number;
   sceneId?: string;
   lastActionIndex?: number;
+  directorState?: DirectorState;
 }
 
 /**
@@ -62,6 +81,12 @@ export interface SessionConfig {
   currentTurn: number;
   triggerAgentId?: string; // For discussion: first agent to speak
   defaultAgentId?: string; // For QA: the responding agent
+  autoEndPolicy?: AutoEndPolicy;
+  discussionTopic?: string;
+  discussionPrompt?: string;
+  studentQuestion?: string;
+  discussionMode?: DiscussionMode;
+  debateConfig?: DebateConfig;
 }
 
 /**
@@ -217,7 +242,7 @@ export interface LectureNoteEntry {
 // ==================== Stateless Multi-Agent API Types ====================
 
 import type { Stage, Scene, StageMode } from '@/lib/types/stage';
-import type { AgentTurnSummary, WhiteboardActionRecord } from '@/lib/orchestration/director-prompt';
+import type { AgentTurnSummary, WhiteboardLedgerRecord } from '@/lib/orchestration/director-prompt';
 
 /**
  * Accumulated director state passed between per-agent requests.
@@ -226,7 +251,8 @@ import type { AgentTurnSummary, WhiteboardActionRecord } from '@/lib/orchestrati
 export interface DirectorState {
   turnCount: number;
   agentResponses: AgentTurnSummary[];
-  whiteboardLedger: WhiteboardActionRecord[];
+  whiteboardLedger: WhiteboardLedgerRecord[];
+  debateState?: DebateState;
 }
 
 /**
@@ -254,6 +280,14 @@ export interface StatelessChatRequest {
     discussionPrompt?: string;
     /** Which agent should speak first in a discussion */
     triggerAgentId?: string;
+    /** Optional automatic ending rule for runtime classroom discussions */
+    autoEndPolicy?: AutoEndPolicy;
+    /** Original student question that triggered an automatic discussion */
+    studentQuestion?: string;
+    /** Explicit discussion mode. Debate mode uses deterministic A -> B -> USER routing. */
+    discussionMode?: DiscussionMode;
+    /** Explicit agent pairing for debate mode. */
+    debateConfig?: DebateConfig;
     /** Full agent configs for generated (non-default) agents that aren't in the server-side registry */
     agentConfigs?: Array<{
       id: string;
@@ -275,6 +309,10 @@ export interface StatelessChatRequest {
     nickname?: string;
     bio?: string;
   };
+  /** Server-injected references from the local Chinese Xinhua dictionary. */
+  dictionaryContext?: string;
+  /** Server-injected long-term learning memory retrieved by RAG. */
+  longTermMemoryContext?: string;
   /** OpenAI-compatible API credentials */
   apiKey: string;
   baseUrl?: string;

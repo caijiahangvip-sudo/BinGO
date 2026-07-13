@@ -6,7 +6,7 @@
  */
 
 import type { ActionType } from './action';
-import type { MediaGenerationRequest } from '@/lib/media/types';
+import type { ColorThemeId } from '@/lib/theme/color-themes';
 
 // ==================== PDF Image Types ====================
 
@@ -68,6 +68,7 @@ export interface UserRequirements {
   userNickname?: string; // Student nickname for personalization
   userBio?: string; // Student background for personalization
   webSearch?: boolean; // Enable web search for richer context
+  visualTheme?: ColorThemeId; // Visual theme for generated classroom pages
 }
 
 /**
@@ -101,10 +102,12 @@ export interface SceneOutline {
   estimatedDuration?: number; // seconds
   order: number;
   language?: 'zh-CN' | 'en-US'; // Generation language (inherited from requirements)
+  learningContext?: {
+    section: 'review' | 'lesson' | 'practice';
+    knowledgePointIds: string[];
+  };
   // Suggested image IDs (from PDF-extracted images)
   suggestedImageIds?: string[]; // e.g., ["img_1", "img_3"]
-  // AI-generated media requests (when PDF images are insufficient)
-  mediaGenerations?: MediaGenerationRequest[]; // e.g., [{ type: 'image', prompt: '...', elementId: 'gen_img_1' }]
   // Quiz-specific config
   quizConfig?: {
     questionCount: number;

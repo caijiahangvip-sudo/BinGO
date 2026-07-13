@@ -2,13 +2,14 @@
  * Server-side Provider Configuration
  *
  * Loads provider configs from YAML (primary) + environment variables (fallback).
- * Keys never leave the server — only provider IDs and metadata are exposed via API.
+ * Keys never leave the server; only provider IDs and metadata are exposed via API.
  */
 
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { createLogger } from '@/lib/logger';
+import { LOCAL_BGE_BASE_ZH_MODEL_ID, normalizeVectorProviderId } from '@/lib/vector/constants';
 
 const log = createLogger('ServerProviderConfig');
 
@@ -28,8 +29,7 @@ interface ServerConfig {
   tts: Record<string, ServerProviderEntry>;
   asr: Record<string, ServerProviderEntry>;
   pdf: Record<string, ServerProviderEntry>;
-  image: Record<string, ServerProviderEntry>;
-  video: Record<string, ServerProviderEntry>;
+  vector: Record<string, ServerProviderEntry>;
   webSearch: Record<string, ServerProviderEntry>;
 }
 
@@ -47,7 +47,6 @@ const LLM_ENV_MAP: Record<string, string> = {
   MINIMAX: 'minimax',
   GLM: 'glm',
   SILICONFLOW: 'siliconflow',
-  DOUBAO: 'doubao',
   GROK: 'grok',
 };
 
@@ -56,7 +55,7 @@ const TTS_ENV_MAP: Record<string, string> = {
   TTS_AZURE: 'azure-tts',
   TTS_GLM: 'glm-tts',
   TTS_QWEN: 'qwen-tts',
-  TTS_DOUBAO: 'doubao-tts',
+  TTS_COSYVOICE: 'cosyvoice-tts',
   TTS_ELEVENLABS: 'elevenlabs-tts',
   TTS_MINIMAX: 'minimax-tts',
 };
@@ -64,33 +63,26 @@ const TTS_ENV_MAP: Record<string, string> = {
 const ASR_ENV_MAP: Record<string, string> = {
   ASR_OPENAI: 'openai-whisper',
   ASR_QWEN: 'qwen-asr',
+  ASR_SENSEVOICE: 'sensevoice-asr',
 };
 
 const PDF_ENV_MAP: Record<string, string> = {
-  PDF_UNPDF: 'unpdf',
-  PDF_MINERU: 'mineru',
+  PDF_MINERU_LOCAL: 'mineru-local',
 };
 
-const IMAGE_ENV_MAP: Record<string, string> = {
-  IMAGE_SEEDREAM: 'seedream',
-  IMAGE_QWEN_IMAGE: 'qwen-image',
-  IMAGE_NANO_BANANA: 'nano-banana',
-  IMAGE_MINIMAX: 'minimax-image',
-  IMAGE_GROK: 'grok-image',
-};
-
-const VIDEO_ENV_MAP: Record<string, string> = {
-  VIDEO_SEEDANCE: 'seedance',
-  VIDEO_KLING: 'kling',
-  VIDEO_VEO: 'veo',
-  VIDEO_SORA: 'sora',
-  VIDEO_MINIMAX: 'minimax-video',
-  VIDEO_GROK: 'grok-video',
+const VECTOR_ENV_MAP: Record<string, string> = {
+  VECTOR_OPENAI: 'openai-embedding',
+  VECTOR_QWEN: 'qwen-embedding',
+  VECTOR_SILICONFLOW: 'siliconflow',
+  BINGO_EMBEDDING: 'chinese-xinhua-local',
 };
 
 const WEB_SEARCH_ENV_MAP: Record<string, string> = {
   TAVILY: 'tavily',
 };
+
+const CLIENT_ONLY_LLM_PROVIDER_IDS = new Set(['doubao']);
+const CLIENT_ONLY_TTS_PROVIDER_IDS = new Set(['doubao-tts']);
 
 // ---------------------------------------------------------------------------
 // YAML loading
@@ -101,8 +93,7 @@ type YamlData = Partial<{
   tts: Record<string, Partial<ServerProviderEntry>>;
   asr: Record<string, Partial<ServerProviderEntry>>;
   pdf: Record<string, Partial<ServerProviderEntry>>;
-  image: Record<string, Partial<ServerProviderEntry>>;
-  video: Record<string, Partial<ServerProviderEntry>>;
+  vector: Record<string, Partial<ServerProviderEntry>>;
   'web-search': Record<string, Partial<ServerProviderEntry>>;
 }>;
 
@@ -160,7 +151,7 @@ function loadEnvSection(
       : undefined;
 
     if (result[providerId]) {
-      // YAML entry exists — env vars override individual fields
+      // YAML entry exists; env vars override individual fields.
       if (envApiKey) result[providerId].apiKey = envApiKey;
       if (envBaseUrl) result[providerId].baseUrl = envBaseUrl;
       if (envModels) result[providerId].models = envModels;
@@ -178,6 +169,83 @@ function loadEnvSection(
   return result;
 }
 
+function loadTtsEnvSection(
+  yamlSection: Record<string, Partial<ServerProviderEntry>> | undefined,
+): Record<string, ServerProviderEntry> {
+  return {
+    ...loadEnvSection(TTS_ENV_MAP, yamlSection),
+    ...loadEnvSection(
+      { TTS_COSYVOICE: 'cosyvoice-tts' },
+      yamlSection ? { 'cosyvoice-tts': yamlSection['cosyvoice-tts'] } : undefined,
+      { requiresBaseUrl: true },
+    ),
+  };
+}
+
+function loadAsrEnvSection(
+  yamlSection: Record<string, Partial<ServerProviderEntry>> | undefined,
+): Record<string, ServerProviderEntry> {
+  return {
+    ...loadEnvSection(ASR_ENV_MAP, yamlSection),
+    ...loadEnvSection(
+      { ASR_SENSEVOICE: 'sensevoice-asr' },
+      yamlSection ? { 'sensevoice-asr': yamlSection['sensevoice-asr'] } : undefined,
+      { requiresBaseUrl: true },
+    ),
+  };
+}
+
+function loadVectorEnvSection(
+  yamlSection: Record<string, Partial<ServerProviderEntry>> | undefined,
+): Record<string, ServerProviderEntry> {
+  const entries = [
+    ...Object.entries(loadEnvSection(VECTOR_ENV_MAP, yamlSection)),
+    ...Object.entries(loadEnvSection(
+      { BINGO_EMBEDDING: 'chinese-xinhua-local' },
+      yamlSection ? { 'chinese-xinhua-local': yamlSection['chinese-xinhua-local'] } : undefined,
+      { requiresBaseUrl: true },
+    )),
+  ];
+  const result: Record<string, ServerProviderEntry> = {};
+  for (const [id, entry] of entries) {
+    const normalizedId = normalizeVectorProviderId(id);
+    const existing = result[normalizedId];
+    const models = entry.models || existing?.models;
+    const isLocalEmbedding =
+      id === 'chinese-xinhua-local' || (id === 'siliconflow' && !!entry.baseUrl && !entry.apiKey);
+    const mergedModels =
+      isLocalEmbedding && !(models || []).includes(LOCAL_BGE_BASE_ZH_MODEL_ID)
+        ? [LOCAL_BGE_BASE_ZH_MODEL_ID, ...(models || [])]
+        : models;
+    const existingHasRemoteConfig =
+      !!existing?.apiKey ||
+      (!!existing?.baseUrl && existing.baseUrl !== entry.baseUrl && !/localhost|127\.0\.0\.1/.test(existing.baseUrl));
+    const nextApiKey = entry.apiKey || existing?.apiKey || '';
+    const nextBaseUrl =
+      isLocalEmbedding && existingHasRemoteConfig
+        ? existing?.baseUrl
+        : entry.apiKey
+          ? entry.baseUrl
+          : existing?.baseUrl || entry.baseUrl;
+    result[normalizedId] = {
+      ...existing,
+      ...entry,
+      apiKey: nextApiKey,
+      baseUrl: nextBaseUrl,
+      models: mergedModels,
+    };
+  }
+  return result;
+}
+
+function omitProviderIds(
+  entries: Record<string, ServerProviderEntry>,
+  providerIds: Set<string>,
+): Record<string, ServerProviderEntry> {
+  if (providerIds.size === 0) return entries;
+  return Object.fromEntries(Object.entries(entries).filter(([id]) => !providerIds.has(id)));
+}
+
 // ---------------------------------------------------------------------------
 // Module-level cache (process singleton)
 // ---------------------------------------------------------------------------
@@ -189,12 +257,14 @@ const _configs: Map<string, ServerConfig> = new Map();
 
 function buildConfig(yamlData: YamlData): ServerConfig {
   return {
-    providers: loadEnvSection(LLM_ENV_MAP, yamlData.providers),
-    tts: loadEnvSection(TTS_ENV_MAP, yamlData.tts),
-    asr: loadEnvSection(ASR_ENV_MAP, yamlData.asr),
+    providers: omitProviderIds(
+      loadEnvSection(LLM_ENV_MAP, yamlData.providers),
+      CLIENT_ONLY_LLM_PROVIDER_IDS,
+    ),
+    tts: omitProviderIds(loadTtsEnvSection(yamlData.tts), CLIENT_ONLY_TTS_PROVIDER_IDS),
+    asr: loadAsrEnvSection(yamlData.asr),
     pdf: loadEnvSection(PDF_ENV_MAP, yamlData.pdf, { requiresBaseUrl: true }),
-    image: loadEnvSection(IMAGE_ENV_MAP, yamlData.image),
-    video: loadEnvSection(VIDEO_ENV_MAP, yamlData.video),
+    vector: loadVectorEnvSection(yamlData.vector),
     webSearch: loadEnvSection(WEB_SEARCH_ENV_MAP, yamlData['web-search']),
   };
 }
@@ -205,13 +275,12 @@ function logConfig(config: ServerConfig, label: string): void {
     Object.keys(config.tts).length,
     Object.keys(config.asr).length,
     Object.keys(config.pdf).length,
-    Object.keys(config.image).length,
-    Object.keys(config.video).length,
+    Object.keys(config.vector).length,
     Object.keys(config.webSearch).length,
   ];
   if (counts.some((c) => c > 0)) {
     log.info(
-      `[ServerProviderConfig] Loaded (${label}): ${counts[0]} LLM, ${counts[1]} TTS, ${counts[2]} ASR, ${counts[3]} PDF, ${counts[4]} Image, ${counts[5]} Video, ${counts[6]} WebSearch providers`,
+      `[ServerProviderConfig] Loaded (${label}): ${counts[0]} LLM, ${counts[1]} TTS, ${counts[2]} ASR, ${counts[3]} PDF, ${counts[4]} Vector, ${counts[5]} WebSearch providers`,
     );
   }
 }
@@ -228,7 +297,7 @@ function getConfig(): ServerConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Public API — LLM
+// Public API - LLM
 // ---------------------------------------------------------------------------
 
 /** Returns server-configured LLM providers (no apiKeys) */
@@ -261,7 +330,7 @@ export function resolveProxy(providerId: string): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Public API — TTS
+// Public API - TTS
 // ---------------------------------------------------------------------------
 
 export function getServerTTSProviders(): Record<string, { baseUrl?: string }> {
@@ -285,7 +354,7 @@ export function resolveTTSBaseUrl(providerId: string, clientBaseUrl?: string): s
 }
 
 // ---------------------------------------------------------------------------
-// Public API — ASR
+// Public API - ASR
 // ---------------------------------------------------------------------------
 
 export function getServerASRProviders(): Record<string, { baseUrl?: string }> {
@@ -309,7 +378,7 @@ export function resolveASRBaseUrl(providerId: string, clientBaseUrl?: string): s
 }
 
 // ---------------------------------------------------------------------------
-// Public API — PDF
+// Public API - PDF
 // ---------------------------------------------------------------------------
 
 export function getServerPDFProviders(): Record<string, { baseUrl?: string }> {
@@ -333,59 +402,35 @@ export function resolvePDFBaseUrl(providerId: string, clientBaseUrl?: string): s
 }
 
 // ---------------------------------------------------------------------------
-// Public API — Image Generation
+// Public API - Vector / Embedding
 // ---------------------------------------------------------------------------
 
-export function getServerImageProviders(): Record<string, Record<string, never>> {
+export function getServerVectorProviders(): Record<string, { models?: string[]; baseUrl?: string }> {
   const cfg = getConfig();
-  const result: Record<string, Record<string, never>> = {};
-  for (const id of Object.keys(cfg.image)) {
+  const result: Record<string, { models?: string[]; baseUrl?: string }> = {};
+  for (const [id, entry] of Object.entries(cfg.vector)) {
     result[id] = {};
+    if (entry.models && entry.models.length > 0) result[id].models = entry.models;
+    if (entry.baseUrl) result[id].baseUrl = entry.baseUrl;
   }
   return result;
 }
 
-export function resolveImageApiKey(providerId: string, clientKey?: string): string {
+export function resolveVectorApiKey(providerId: string, clientKey?: string): string {
   if (clientKey) return clientKey;
-  return getConfig().image[providerId]?.apiKey || '';
+  return getConfig().vector[normalizeVectorProviderId(providerId)]?.apiKey || '';
 }
 
-export function resolveImageBaseUrl(
+export function resolveVectorBaseUrl(
   providerId: string,
   clientBaseUrl?: string,
 ): string | undefined {
   if (clientBaseUrl) return clientBaseUrl;
-  return getConfig().image[providerId]?.baseUrl;
+  return getConfig().vector[normalizeVectorProviderId(providerId)]?.baseUrl;
 }
 
 // ---------------------------------------------------------------------------
-// Public API — Video Generation
-// ---------------------------------------------------------------------------
-
-export function getServerVideoProviders(): Record<string, Record<string, never>> {
-  const cfg = getConfig();
-  const result: Record<string, Record<string, never>> = {};
-  for (const id of Object.keys(cfg.video)) {
-    result[id] = {};
-  }
-  return result;
-}
-
-export function resolveVideoApiKey(providerId: string, clientKey?: string): string {
-  if (clientKey) return clientKey;
-  return getConfig().video[providerId]?.apiKey || '';
-}
-
-export function resolveVideoBaseUrl(
-  providerId: string,
-  clientBaseUrl?: string,
-): string | undefined {
-  if (clientBaseUrl) return clientBaseUrl;
-  return getConfig().video[providerId]?.baseUrl;
-}
-
-// ---------------------------------------------------------------------------
-// Public API — Web Search (Tavily)
+// Public API - Web Search (Tavily)
 // ---------------------------------------------------------------------------
 
 /** Returns server-configured web search providers (no apiKeys exposed) */

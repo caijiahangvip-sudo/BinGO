@@ -19,7 +19,12 @@
  */
 
 import type { LanguageModel } from 'ai';
-import type { StatelessChatRequest, StatelessEvent, ParsedAction } from '@/lib/types/chat';
+import type {
+  DebateState,
+  StatelessChatRequest,
+  StatelessEvent,
+  ParsedAction,
+} from '@/lib/types/chat';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import type { WhiteboardActionRecord } from './director-prompt';
 import { createOrchestrationGraph, buildInitialState } from './director-graph';
@@ -28,6 +33,38 @@ import { jsonrepair } from 'jsonrepair';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('StatelessGenerate');
+
+export function getInitialDebateState(request: StatelessChatRequest): DebateState | undefined {
+  const config = request.config.debateConfig;
+  if (request.config.discussionMode !== 'debate' || !config) return undefined;
+  return {
+    phase: 'agent_a',
+    agentAId: config.agentAId,
+    agentBId: config.agentBId,
+    topic: config.topic || request.config.discussionTopic,
+  };
+}
+
+export function advanceDebateState(
+  request: StatelessChatRequest,
+  currentAgentId: string | null,
+  totalAgents: number,
+  cueUserReceived: boolean,
+): DebateState | undefined {
+  const current = request.directorState?.debateState ?? getInitialDebateState(request);
+  if (!current) return undefined;
+
+  if (totalAgents > 0 && currentAgentId === current.agentAId) {
+    return { ...current, phase: 'agent_b' };
+  }
+  if (totalAgents > 0 && currentAgentId === current.agentBId) {
+    return { ...current, phase: 'user' };
+  }
+  if (cueUserReceived || current.phase === 'user') {
+    return { ...current, phase: 'done' };
+  }
+  return current;
+}
 
 // ==================== Structured Output Parser ====================
 
@@ -348,6 +385,7 @@ export async function* statelessGenerate(
     let currentAgentName: string | null = null;
     let contentPreview = '';
     let agentActionCount = 0;
+    let cueUserReceived = false;
     const agentWbActions: WhiteboardActionRecord[] = [];
 
     for await (const chunk of stream) {
@@ -372,11 +410,15 @@ export async function* statelessGenerate(
         if (event.data.actionName.startsWith('wb_')) {
           agentWbActions.push({
             actionName: event.data.actionName as WhiteboardActionRecord['actionName'],
+            actorType: 'agent',
             agentId: event.data.agentId,
             agentName: currentAgentName || event.data.agentId,
             params: event.data.params,
           });
         }
+      }
+      if (event.type === 'cue_user') {
+        cueUserReceived = true;
       }
 
       yield event;
@@ -387,6 +429,7 @@ export async function* statelessGenerate(
     const prevResponses = incoming?.agentResponses ?? [];
     const prevLedger = incoming?.whiteboardLedger ?? [];
     const prevTurnCount = incoming?.turnCount ?? 0;
+    const debateState = advanceDebateState(request, currentAgentId, totalAgents, cueUserReceived);
 
     const directorState =
       totalAgents > 0
@@ -403,11 +446,13 @@ export async function* statelessGenerate(
               },
             ],
             whiteboardLedger: [...prevLedger, ...agentWbActions],
+            debateState,
           }
         : {
             turnCount: prevTurnCount,
             agentResponses: prevResponses,
             whiteboardLedger: prevLedger,
+            debateState,
           };
 
     yield {

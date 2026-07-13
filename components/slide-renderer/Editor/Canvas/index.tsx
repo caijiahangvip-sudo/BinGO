@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useMemo } from 'react';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useSceneSelector } from '@/lib/contexts/scene-context';
 import { useKeyboardStore } from '@/lib/store/keyboard';
@@ -29,6 +29,7 @@ import type { AlignmentLineProps } from '@/lib/types/edit';
 import type { ContextmenuItem } from './EditableElement';
 import type { SlideContent } from '@/lib/types/stage';
 import { useCanvasOperations } from '@/lib/hooks/use-canvas-operations';
+import { repairGeometryDiagramLayering } from '@/lib/utils/slide-element-order';
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -91,6 +92,10 @@ export function Canvas(_props: CanvasProps) {
   // Local element list for drag/scale/rotate operations
   const elementListRef = useRef<PPTElement[]>(elements || []);
   const [elementList, setElementList] = useState<PPTElement[]>(elements || []);
+  const orderedElementList = useMemo(
+    () => repairGeometryDiagramLayering(elementList),
+    [elementList],
+  );
 
   // Sync store elements to local state
   useEffect(() => {
@@ -326,7 +331,7 @@ export function Canvas(_props: CanvasProps) {
               )}
 
               {/* Render all elements */}
-              {elementList.map((element: PPTElement, index: number) =>
+              {orderedElementList.map((element: PPTElement, index: number) =>
                 !hiddenElementIdList.includes(element.id) ? (
                   <EditableElement
                     key={element.id}

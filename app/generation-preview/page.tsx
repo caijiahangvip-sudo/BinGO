@@ -19,23 +19,95 @@ import {
   cleanupOldImages,
   storeImages,
 } from '@/lib/utils/image-storage';
-import { getCurrentModelConfig } from '@/lib/utils/model-config';
+import { getModelApiHeaders, type ModelConfigProfile } from '@/lib/utils/model-config';
 import { db } from '@/lib/utils/database';
+import { createAudioBlob, normalizeAudioFormat } from '@/lib/audio/mime';
+import {
+  markAutoStartFirstLecture,
+  storeSessionGenerationParams,
+} from '@/lib/utils/classroom-generation-params';
 import { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from '@/lib/constants/generation';
 import { nanoid } from 'nanoid';
 import type { Stage } from '@/lib/types/stage';
 import type { SceneOutline, PdfImage, ImageMapping } from '@/lib/types/generation';
+import { prependBookLessonReviewPrelude } from '@/lib/utils/book-lesson-generation-session';
+import { extractClassroomTitleFromRequirement } from '@/lib/utils/export-file-name';
 import { AgentRevealModal } from '@/components/agent/agent-reveal-modal';
 import { createLogger } from '@/lib/logger';
 import { type GenerationSessionState, ALL_STEPS, getActiveSteps } from './types';
 import { StepVisualizer } from './components/visualizers';
+import { resolveColorThemeId } from '@/lib/theme/color-themes';
+import { getCurrentColorTheme } from '@/lib/theme/theme-runtime';
 
 const log = createLogger('GenerationPreview');
+const GENERATION_PREVIEW_PDF_MAX_PAGES = 8;
+
+type ParsePdfImagePayload = {
+  id: string;
+  src?: string;
+  pageNumber?: number;
+  description?: string;
+  width?: number;
+  height?: number;
+};
+
+type ParsePdfApiResponse = {
+  success?: boolean;
+  data?: ParsePdfData;
+  error?: string;
+};
+
+type ParsePdfData = {
+  text: string;
+  images?: string[];
+  metadata?: {
+    pdfImages?: ParsePdfImagePayload[];
+  };
+};
+
+function isParsePdfData(data: ParsePdfApiResponse['data']): data is ParsePdfData {
+  return !!data && typeof data.text === 'string';
+}
+
+async function readApiJson<T>(response: Response, fallbackError: string): Promise<T> {
+  const contentType = response.headers.get('content-type') || '';
+  const body = await response.text();
+
+  if (!contentType.toLowerCase().includes('application/json')) {
+    log.error('API returned a non-JSON response:', {
+      url: response.url,
+      status: response.status,
+      statusText: response.statusText,
+      contentType: contentType || 'unknown',
+      bodyPreview: body.replace(/\s+/g, ' ').slice(0, 200),
+    });
+
+    throw new Error(
+      response.ok
+        ? fallbackError
+        : `${fallbackError} (HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''})`,
+    );
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch (error) {
+    log.error('Failed to parse API JSON response:', {
+      url: response.url,
+      status: response.status,
+      contentType,
+      bodyPreview: body.replace(/\s+/g, ' ').slice(0, 200),
+      error,
+    });
+    throw new Error(fallbackError);
+  }
+}
 
 function GenerationPreviewContent() {
   const router = useRouter();
   const { t } = useI18n();
   const hasStartedRef = useRef(false);
+  const isLeavingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const [session, setSession] = useState<GenerationSessionState | null>(null);
@@ -61,7 +133,6 @@ function GenerationPreviewContent() {
       priority: number;
     }>
   >([]);
-  const agentRevealResolveRef = useRef<(() => void) | null>(null);
 
   // Compute active steps based on session state
   const activeSteps = getActiveSteps(session);
@@ -74,7 +145,20 @@ function GenerationPreviewContent() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as GenerationSessionState;
-        setSession(parsed);
+        const visualTheme = resolveColorThemeId(
+          parsed.requirements.visualTheme ?? getCurrentColorTheme(),
+        );
+        const normalizedSession: GenerationSessionState = {
+          ...parsed,
+          requirements: {
+            ...parsed.requirements,
+            visualTheme,
+          },
+        };
+        setSession(normalizedSession);
+        if (parsed.requirements.visualTheme !== visualTheme) {
+          sessionStorage.setItem('generationSession', JSON.stringify(normalizedSession));
+        }
       } catch (e) {
         log.error('Failed to parse generation session:', e);
       }
@@ -91,31 +175,7 @@ function GenerationPreviewContent() {
 
   // Get API credentials from localStorage
   const getApiHeaders = () => {
-    const modelConfig = getCurrentModelConfig();
-    const settings = useSettingsStore.getState();
-    const imageProviderConfig = settings.imageProvidersConfig?.[settings.imageProviderId];
-    const videoProviderConfig = settings.videoProvidersConfig?.[settings.videoProviderId];
-    return {
-      'Content-Type': 'application/json',
-      'x-model': modelConfig.modelString,
-      'x-api-key': modelConfig.apiKey,
-      'x-base-url': modelConfig.baseUrl,
-      'x-provider-type': modelConfig.providerType || '',
-      'x-requires-api-key': modelConfig.requiresApiKey ? 'true' : 'false',
-      // Image generation provider
-      'x-image-provider': settings.imageProviderId || '',
-      'x-image-model': settings.imageModelId || '',
-      'x-image-api-key': imageProviderConfig?.apiKey || '',
-      'x-image-base-url': imageProviderConfig?.baseUrl || '',
-      // Video generation provider
-      'x-video-provider': settings.videoProviderId || '',
-      'x-video-model': settings.videoModelId || '',
-      'x-video-api-key': videoProviderConfig?.apiKey || '',
-      'x-video-base-url': videoProviderConfig?.baseUrl || '',
-      // Media generation toggles
-      'x-image-generation-enabled': String(settings.imageGenerationEnabled ?? false),
-      'x-video-generation-enabled': String(settings.videoGenerationEnabled ?? false),
-    };
+    return getModelApiHeaders();
   };
 
   // Auto-start generation when session is loaded
@@ -147,8 +207,24 @@ function GenerationPreviewContent() {
       // Compute active steps for this session (recomputed after session mutations)
       let activeSteps = getActiveSteps(currentSession);
 
+      // Book lessons are generated from the already-created plan/lesson context.
+      // Do not re-parse the whole source PDF here: large textbooks can exceed
+      // MinerU's task timeout and block the queue for no useful gain.
+      if (currentSession.bookLessonContext && currentSession.pdfStorageKey) {
+        currentSession = {
+          ...currentSession,
+          pdfText: currentSession.pdfText || currentSession.requirements.requirement,
+          pdfStorageKey: undefined,
+        };
+        setSession(currentSession);
+        sessionStorage.setItem('generationSession', JSON.stringify(currentSession));
+      }
+
       // Determine if we need the PDF analysis step
-      const hasPdfToAnalyze = !!currentSession.pdfStorageKey && !currentSession.pdfText;
+      const hasPdfToAnalyze =
+        !!currentSession.pdfStorageKey &&
+        !currentSession.pdfText &&
+        !currentSession.bookLessonContext;
       // If no PDF to analyze, skip to the next available step
       if (!hasPdfToAnalyze) {
         const firstNonPdfIdx = activeSteps.findIndex((s) => s.id !== 'pdf-analysis');
@@ -179,6 +255,11 @@ function GenerationPreviewContent() {
 
         const parseFormData = new FormData();
         parseFormData.append('pdf', pdfFile);
+        parseFormData.append('mode', 'fast');
+        parseFormData.append('maxPages', String(GENERATION_PREVIEW_PDF_MAX_PAGES));
+        parseFormData.append('needsCover', 'false');
+        parseFormData.append('needsImages', 'false');
+        parseFormData.append('needsMiddleJson', 'false');
 
         if (currentSession.pdfProviderId) {
           parseFormData.append('providerId', currentSession.pdfProviderId);
@@ -196,17 +277,22 @@ function GenerationPreviewContent() {
           signal,
         });
 
+        const parseResult = await readApiJson<ParsePdfApiResponse>(
+          parseResponse,
+          t('generation.pdfParseFailed'),
+        );
+
         if (!parseResponse.ok) {
-          const errorData = await parseResponse.json();
-          throw new Error(errorData.error || t('generation.pdfParseFailed'));
+          throw new Error(parseResult.error || t('generation.pdfParseFailed'));
         }
 
-        const parseResult = await parseResponse.json();
-        if (!parseResult.success || !parseResult.data) {
+        if (!parseResult.success || !isParsePdfData(parseResult.data)) {
           throw new Error(t('generation.pdfParseFailed'));
         }
 
-        let pdfText = parseResult.data.text as string;
+        const parsedPdfData = parseResult.data;
+
+        let pdfText = parsedPdfData.text;
 
         // Truncate if needed
         if (pdfText.length > MAX_PDF_CONTENT_CHARS) {
@@ -215,26 +301,20 @@ function GenerationPreviewContent() {
 
         // Create image metadata and store images
         // Prefer metadata.pdfImages (both parsers now return this)
-        const rawPdfImages = parseResult.data.metadata?.pdfImages;
+        const rawPdfImages = Array.isArray(parsedPdfData.metadata?.pdfImages)
+          ? parsedPdfData.metadata.pdfImages
+          : undefined;
+        const fallbackImages = Array.isArray(parsedPdfData.images) ? parsedPdfData.images : [];
         const images = rawPdfImages
-          ? rawPdfImages.map(
-              (img: {
-                id: string;
-                src?: string;
-                pageNumber?: number;
-                description?: string;
-                width?: number;
-                height?: number;
-              }) => ({
-                id: img.id,
-                src: img.src || '',
-                pageNumber: img.pageNumber || 1,
-                description: img.description,
-                width: img.width,
-                height: img.height,
-              }),
-            )
-          : (parseResult.data.images as string[]).map((src: string, i: number) => ({
+          ? rawPdfImages.map((img) => ({
+              id: img.id,
+              src: img.src || '',
+              pageNumber: img.pageNumber || 1,
+              description: img.description,
+              width: img.width,
+              height: img.height,
+            }))
+          : fallbackImages.map((src: string, i: number) => ({
               id: `img_${i + 1}`,
               src,
               pageNumber: 1,
@@ -277,7 +357,7 @@ function GenerationPreviewContent() {
 
         // Truncation warnings
         const warnings: string[] = [];
-        if ((parseResult.data.text as string).length > MAX_PDF_CONTENT_CHARS) {
+        if (parsedPdfData.text.length > MAX_PDF_CONTENT_CHARS) {
           warnings.push(t('generation.textTruncated', { n: MAX_PDF_CONTENT_CHARS }));
         }
         if (images.length > MAX_VISION_IMAGES) {
@@ -303,6 +383,8 @@ function GenerationPreviewContent() {
         const wsSettings = useSettingsStore.getState();
         const wsApiKey =
           wsSettings.webSearchProvidersConfig?.[wsSettings.webSearchProviderId]?.apiKey;
+        const wsBaseUrl =
+          wsSettings.webSearchProvidersConfig?.[wsSettings.webSearchProviderId]?.baseUrl;
         const res = await fetch('/api/web-search', {
           method: 'POST',
           headers: getApiHeaders(),
@@ -310,6 +392,7 @@ function GenerationPreviewContent() {
             query: currentSession.requirements.requirement,
             pdfText: currentSession.pdfText || undefined,
             apiKey: wsApiKey || undefined,
+            baseUrl: wsBaseUrl || undefined,
           }),
           signal,
         });
@@ -361,17 +444,23 @@ function GenerationPreviewContent() {
 
       // Create stage client-side (needed for agent generation stageId)
       const stageId = nanoid(10);
+      const visualTheme = resolveColorThemeId(currentSession.requirements.visualTheme);
       const stage: Stage = {
         id: stageId,
-        name: extractTopicFromRequirement(currentSession.requirements.requirement),
+        name: extractClassroomTitleFromRequirement(currentSession.requirements.requirement),
         description: '',
         language: currentSession.requirements.language || 'zh-CN',
         style: 'professional',
+        visualTheme,
+        bookLessonContext: currentSession.bookLessonContext,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
 
-      if (settings.agentMode === 'auto') {
+      const shouldGenerateAgents =
+        !!currentSession.forceAgentGeneration || settings.agentMode === 'auto';
+
+      if (shouldGenerateAgents) {
         const agentStepIdx = activeSteps.findIndex((s) => s.id === 'agent-generation');
         if (agentStepIdx >= 0) setCurrentStepIndex(agentStepIdx);
 
@@ -438,16 +527,20 @@ function GenerationPreviewContent() {
             );
           };
 
+          const agentModelProfile: ModelConfigProfile =
+            settings.agentGenerationModelProfile === 'main' ? 'main' : 'lightweight';
+
           // No outlines yet — agent generation uses only stage name + description
           const agentResp = await fetch('/api/generate/agent-profiles', {
             method: 'POST',
-            headers: getApiHeaders(),
+            headers: getModelApiHeaders({ profile: agentModelProfile }),
             body: JSON.stringify({
               stageInfo: { name: stage.name, description: stage.description },
               language: currentSession.requirements.language || 'zh-CN',
               availableAvatars: allAvatars.map((a) => a.path),
               avatarDescriptions: allAvatars.map((a) => ({ path: a.path, desc: a.desc })),
-              availableVoices: getAvailableVoicesForGeneration(),
+              availableVoices: getAvailableVoicesForGeneration().slice(0, 24),
+              agentCount: settings.autoAgentCount,
             }),
             signal,
           });
@@ -462,12 +555,9 @@ function GenerationPreviewContent() {
           settings.setSelectedAgentIds(savedIds);
           stage.agentIds = savedIds;
 
-          // Show card-reveal modal, continue generation once all cards are revealed
+          // Show card-reveal modal without blocking outline/content generation.
           setGeneratedAgents(agentData.agents);
           setShowAgentReveal(true);
-          await new Promise<void>((resolve) => {
-            agentRevealResolveRef.current = resolve;
-          });
 
           agents = savedIds
             .map((id) => useAgentRegistry.getState().getAgent(id))
@@ -538,6 +628,8 @@ function GenerationPreviewContent() {
               imageMapping,
               researchContext: currentSession.researchContext,
               agents,
+              forceClassroomScenes:
+                !!currentSession.forceAgentGeneration || !!currentSession.bookLessonContext,
             }),
             signal,
           })
@@ -576,7 +668,9 @@ function GenerationPreviewContent() {
                           setStreamingOutlines([]);
                           setStatusMessage(t('generation.outlineRetrying'));
                         } else if (evt.type === 'done') {
-                          resolve(evt.outlines || collected);
+                          const finalOutlines = evt.outlines || collected;
+                          setStreamingOutlines(finalOutlines);
+                          resolve(finalOutlines);
                           return;
                         } else if (evt.type === 'error') {
                           reject(new Error(evt.error));
@@ -618,11 +712,63 @@ function GenerationPreviewContent() {
         await new Promise((resolve) => setTimeout(resolve, 800));
       }
 
+      if (currentSession.bookLessonContext && outlines && outlines.length > 0) {
+        const enrichedOutlines = prependBookLessonReviewPrelude(outlines, {
+          language: currentSession.requirements.language || 'zh-CN',
+          lessonKnowledgePointIds: currentSession.bookLessonContext.knowledgePointIds,
+          reviewContext: currentSession.bookLessonContext.reviewContext,
+        });
+        const changed =
+          enrichedOutlines.length !== outlines.length ||
+          enrichedOutlines.some((outline, index) => {
+            const previous = outlines?.[index];
+            return (
+              !previous ||
+              previous.id !== outline.id ||
+              previous.order !== outline.order ||
+              previous.learningContext?.section !== outline.learningContext?.section
+            );
+          });
+
+        if (changed) {
+          outlines = enrichedOutlines;
+          const updatedSession = { ...currentSession, sceneOutlines: outlines };
+          setSession(updatedSession);
+          sessionStorage.setItem('generationSession', JSON.stringify(updatedSession));
+          currentSession = updatedSession;
+          setStreamingOutlines(outlines);
+        }
+      }
+
       // Move to scene generation step
       setStatusMessage('');
       if (!outlines || outlines.length === 0) {
         throw new Error(t('generation.outlineEmptyResponse'));
       }
+
+      // Build stageInfo and userProfile for API call
+      const stageInfo = {
+        name: stage.name,
+        description: stage.description,
+        language: stage.language,
+        style: stage.style,
+        visualTheme: stage.visualTheme,
+      };
+
+      const userProfile =
+        currentSession.requirements.userNickname || currentSession.requirements.userBio
+          ? `Student: ${currentSession.requirements.userNickname || 'Unknown'}${currentSession.requirements.userBio ? ` — ${currentSession.requirements.userBio}` : ''}`
+          : undefined;
+
+      const generationParams = {
+        pdfImages: currentSession.pdfImages,
+        agents,
+        userProfile,
+        forceClassroomScenes:
+          !!currentSession.forceAgentGeneration || !!currentSession.bookLessonContext,
+        visualTheme: stage.visualTheme,
+      };
+      stage.generationParams = generationParams;
 
       // Store stage and outlines
       const store = useStageStore.getState();
@@ -632,19 +778,6 @@ function GenerationPreviewContent() {
       // Advance to slide-content step
       const contentStepIdx = activeSteps.findIndex((s) => s.id === 'slide-content');
       if (contentStepIdx >= 0) setCurrentStepIndex(contentStepIdx);
-
-      // Build stageInfo and userProfile for API call
-      const stageInfo = {
-        name: stage.name,
-        description: stage.description,
-        language: stage.language,
-        style: stage.style,
-      };
-
-      const userProfile =
-        currentSession.requirements.userNickname || currentSession.requirements.userBio
-          ? `Student: ${currentSession.requirements.userNickname || 'Unknown'}${currentSession.requirements.userBio ? ` — ${currentSession.requirements.userBio}` : ''}`
-          : undefined;
 
       // Generate ONLY the first scene
       store.setGeneratingOutlines(outlines);
@@ -663,6 +796,10 @@ function GenerationPreviewContent() {
           stageInfo,
           stageId: stage.id,
           agents,
+          visualTheme: stage.visualTheme,
+          slideLayoutReviewEnabled: settings.slideLayoutReviewEnabled,
+          forceClassroomScenes:
+            !!currentSession.forceAgentGeneration || !!currentSession.bookLessonContext,
         }),
         signal,
       });
@@ -692,6 +829,7 @@ function GenerationPreviewContent() {
           agents,
           previousSpeeches: [],
           userProfile,
+          visualTheme: stage.visualTheme,
         }),
         signal,
       });
@@ -707,8 +845,11 @@ function GenerationPreviewContent() {
       }
 
       // Generate TTS for first scene (part of actions step — blocking)
-      if (settings.ttsEnabled && settings.ttsProviderId !== 'browser-native-tts') {
-        const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
+      const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
+      const ttsCompatibleProviderId =
+        ttsProviderConfig?.compatibleProviderId || settings.ttsProviderId;
+      if (settings.ttsEnabled && ttsCompatibleProviderId !== 'browser-native-tts') {
+        const failSceneOnTTSFailure = ttsCompatibleProviderId === 'cosyvoice-tts';
         const speechActions = (data.scene.actions || []).filter(
           (a: { type: string; text?: string }) => a.type === 'speech' && a.text,
         );
@@ -725,41 +866,64 @@ function GenerationPreviewContent() {
                 text: action.text,
                 audioId,
                 ttsProviderId: settings.ttsProviderId,
+                ttsCompatibleProviderId,
                 ttsModelId: ttsProviderConfig?.modelId,
                 ttsVoice: settings.ttsVoice,
                 ttsSpeed: settings.ttsSpeed,
                 ttsApiKey: ttsProviderConfig?.apiKey || undefined,
                 ttsBaseUrl: ttsProviderConfig?.baseUrl || undefined,
+                ttsProviderOptions: ttsProviderConfig?.providerOptions,
               }),
               signal,
             });
             if (!resp.ok) {
+              if (failSceneOnTTSFailure) {
+                const errorData = await resp
+                  .json()
+                  .catch(() => ({ error: `TTS request failed: HTTP ${resp.status}` }));
+                throw new Error(
+                  errorData.details ||
+                    errorData.error ||
+                    `CosyVoice TTS request failed: HTTP ${resp.status}`,
+                );
+              }
               ttsFailCount++;
               continue;
             }
             const ttsData = await resp.json();
             if (!ttsData.success) {
+              if (failSceneOnTTSFailure) {
+                throw new Error(
+                  ttsData.details || ttsData.error || 'CosyVoice TTS generation failed',
+                );
+              }
               ttsFailCount++;
               continue;
             }
             const binary = atob(ttsData.base64);
             const bytes = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-            const blob = new Blob([bytes], { type: `audio/${ttsData.format}` });
+            const format = normalizeAudioFormat(ttsData.format);
+            const blob = createAudioBlob(bytes, format);
             await db.audioFiles.put({
               id: audioId,
               blob,
-              format: ttsData.format,
+              format,
               createdAt: Date.now(),
             });
           } catch (err) {
+            if (failSceneOnTTSFailure) {
+              throw err;
+            }
             log.warn(`[TTS] Failed for ${audioId}:`, err);
             ttsFailCount++;
           }
         }
 
         if (ttsFailCount > 0 && speechActions.length > 0) {
-          throw new Error(t('generation.speechFailed'));
+          log.warn(
+            `[TTS] ${ttsFailCount}/${speechActions.length} speech audio file(s) failed; continuing without blocking scene generation`,
+          );
         }
       }
 
@@ -771,22 +935,17 @@ function GenerationPreviewContent() {
       const remaining = outlines.filter((o) => o.order !== data.scene.order);
       store.setGeneratingOutlines(remaining);
 
-      // Store generation params for classroom to continue generation
-      sessionStorage.setItem(
-        'generationParams',
-        JSON.stringify({
-          pdfImages: currentSession.pdfImages,
-          agents,
-          userProfile,
-        }),
-      );
+      // Store generation params for the immediate navigation fallback, and mark
+      // the first real classroom open to start teaching automatically.
+      storeSessionGenerationParams(stage.id, generationParams);
+      markAutoStartFirstLecture(stage.id);
 
       sessionStorage.removeItem('generationSession');
       await store.saveToStorage();
       router.push(`/classroom/${stage.id}`);
     } catch (err) {
       // AbortError is expected when navigating away — don't show as error
-      if (err instanceof DOMException && err.name === 'AbortError') {
+      if (isLeavingRef.current || (err instanceof DOMException && err.name === 'AbortError')) {
         log.info('[GenerationPreview] Generation aborted');
         return;
       }
@@ -795,24 +954,20 @@ function GenerationPreviewContent() {
     }
   };
 
-  const extractTopicFromRequirement = (requirement: string): string => {
-    const trimmed = requirement.trim();
-    if (trimmed.length <= 500) {
-      return trimmed;
-    }
-    return trimmed.substring(0, 500).trim() + '...';
-  };
-
   const goBackToHome = () => {
+    isLeavingRef.current = true;
     abortControllerRef.current?.abort();
     sessionStorage.removeItem('generationSession');
-    router.push('/');
+    window.location.replace('/');
   };
 
   // Still loading session from sessionStorage
   if (!sessionLoaded) {
     return (
-      <div className="min-h-[100dvh] w-full bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex items-center justify-center p-4">
+      <div
+        className="min-h-[100dvh] w-full flex items-center justify-center p-4"
+        style={{ background: 'var(--app-gradient)' }}
+      >
         <div className="text-center text-muted-foreground">
           <div className="size-8 border-2 border-current border-t-transparent rounded-full animate-spin mx-auto" />
         </div>
@@ -823,13 +978,16 @@ function GenerationPreviewContent() {
   // No session found
   if (!session) {
     return (
-      <div className="min-h-[100dvh] w-full bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex items-center justify-center p-4">
+      <div
+        className="min-h-[100dvh] w-full flex items-center justify-center p-4"
+        style={{ background: 'var(--app-gradient)' }}
+      >
         <Card className="p-8 max-w-md w-full">
           <div className="text-center space-y-4">
             <AlertCircle className="size-12 text-muted-foreground mx-auto" />
             <h2 className="text-xl font-semibold">{t('generation.sessionNotFound')}</h2>
             <p className="text-sm text-muted-foreground">{t('generation.sessionNotFoundDesc')}</p>
-            <Button onClick={() => router.push('/')} className="w-full">
+            <Button onClick={goBackToHome} className="w-full">
               <ArrowLeft className="size-4 mr-2" />
               {t('generation.backToHome')}
             </Button>
@@ -845,26 +1003,22 @@ function GenerationPreviewContent() {
       : ALL_STEPS[0];
 
   return (
-    <div className="min-h-[100dvh] w-full bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex flex-col items-center justify-center p-4 relative overflow-hidden text-center">
-      {/* Background Decor */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
-        <div
-          className="absolute top-0 left-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl animate-pulse"
-          style={{ animationDuration: '4s' }}
-        />
-        <div
-          className="absolute bottom-0 right-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl animate-pulse"
-          style={{ animationDuration: '6s' }}
-        />
-      </div>
-
+    <div
+      className="min-h-[100dvh] w-full flex flex-col items-center justify-center p-4 relative overflow-hidden text-center"
+      style={{ background: 'var(--app-gradient)' }}
+    >
       {/* Back button */}
       <motion.div
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         className="absolute top-4 left-4 z-20"
       >
-        <Button variant="ghost" size="sm" onClick={goBackToHome}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={goBackToHome}
+          className="h-9 rounded-full border border-border/50 bg-card/70 px-3 text-foreground/75 shadow-sm backdrop-blur-md hover:border-primary/30 hover:bg-card hover:text-foreground hover:shadow-md active:translate-y-px hover:[&_svg]:-translate-x-0.5"
+        >
           <ArrowLeft className="size-4 mr-2" />
           {t('generation.backToHome')}
         </Button>
@@ -877,7 +1031,13 @@ function GenerationPreviewContent() {
           transition={{ duration: 0.5 }}
           className="w-full"
         >
-          <Card className="relative overflow-hidden border-muted/40 shadow-2xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl min-h-[400px] flex flex-col items-center justify-center p-8 md:p-12">
+          <Card
+            className="relative overflow-hidden border-border/60 shadow-2xl backdrop-blur-xl min-h-[400px] flex flex-col items-center justify-center p-8 md:p-12"
+            style={{
+              background: 'var(--app-surface-strong)',
+              boxShadow: '0 24px 80px rgba(var(--app-shadow-rgb), 0.18)',
+            }}
+          >
             {/* Progress Dots */}
             <div className="absolute top-6 left-0 right-0 flex justify-center gap-2">
               {activeSteps.map((step, idx) => (
@@ -886,9 +1046,9 @@ function GenerationPreviewContent() {
                   className={cn(
                     'h-1.5 rounded-full transition-all duration-500',
                     idx < currentStepIndex
-                      ? 'w-1.5 bg-blue-500/30'
+                      ? 'w-1.5 bg-primary/30'
                       : idx === currentStepIndex
-                        ? 'w-8 bg-blue-500'
+                        ? 'w-8 bg-primary'
                         : 'w-1.5 bg-muted/50',
                   )}
                 />
@@ -1049,7 +1209,7 @@ function GenerationPreviewContent() {
                 {generatedAgents.length > 0 && !showAgentReveal && (
                   <button
                     onClick={() => setShowAgentReveal(true)}
-                    className="ml-2 flex items-center gap-1.5 rounded-full border border-purple-300/30 bg-purple-500/10 px-3 py-1 text-xs font-medium normal-case tracking-normal text-purple-400 transition-colors hover:bg-purple-500/20 hover:text-purple-300"
+                    className="ml-2 flex items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium normal-case tracking-normal text-primary transition-colors hover:bg-primary/15"
                   >
                     <Bot className="size-3" />
                     {t('generation.viewAgents')}
@@ -1066,10 +1226,7 @@ function GenerationPreviewContent() {
         agents={generatedAgents}
         open={showAgentReveal}
         onClose={() => setShowAgentReveal(false)}
-        onAllRevealed={() => {
-          agentRevealResolveRef.current?.();
-          agentRevealResolveRef.current = null;
-        }}
+        onAllRevealed={() => {}}
       />
     </div>
   );
@@ -1079,7 +1236,10 @@ export default function GenerationPreviewPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-[100dvh] w-full bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex items-center justify-center">
+        <div
+          className="min-h-[100dvh] w-full flex items-center justify-center"
+          style={{ background: 'var(--app-gradient)' }}
+        >
           <div className="animate-pulse space-y-4 text-center">
             <div className="h-8 w-48 bg-muted rounded mx-auto" />
             <div className="h-4 w-64 bg-muted rounded mx-auto" />

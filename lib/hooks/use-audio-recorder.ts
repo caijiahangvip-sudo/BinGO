@@ -48,18 +48,20 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
         if (typeof window !== 'undefined') {
           const { useSettingsStore } = await import('@/lib/store/settings');
           const { asrProviderId, asrLanguage, asrProvidersConfig } = useSettingsStore.getState();
+          const providerConfig = asrProvidersConfig?.[asrProviderId];
+          const compatibleProviderId = providerConfig?.compatibleProviderId || asrProviderId;
 
           formData.append('providerId', asrProviderId);
+          formData.append('compatibleProviderId', compatibleProviderId);
           formData.append(
             'modelId',
-            asrProvidersConfig?.[asrProviderId]?.modelId ||
-              ASR_PROVIDERS[asrProviderId]?.defaultModelId ||
+            providerConfig?.modelId ||
+              ASR_PROVIDERS[compatibleProviderId]?.defaultModelId ||
               '',
           );
           formData.append('language', asrLanguage);
 
           // Append API key and base URL if configured
-          const providerConfig = asrProvidersConfig?.[asrProviderId];
           if (providerConfig?.apiKey?.trim()) {
             formData.append('apiKey', providerConfig.apiKey);
           }
@@ -100,10 +102,12 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       // Get current ASR configuration
       if (typeof window !== 'undefined') {
         const { useSettingsStore } = await import('@/lib/store/settings');
-        const { asrProviderId, asrLanguage } = useSettingsStore.getState();
+        const { asrProviderId, asrLanguage, asrProvidersConfig } = useSettingsStore.getState();
+        const providerConfig = asrProvidersConfig?.[asrProviderId];
+        const compatibleProviderId = providerConfig?.compatibleProviderId || asrProviderId;
 
         // Use browser native ASR if configured
-        if (asrProviderId === 'browser-native') {
+        if (compatibleProviderId === 'browser-native') {
           // Check if Speech Recognition is supported
           if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
             onError?.('您的浏览器不支持语音识别功能');

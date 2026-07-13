@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import type { ProvidersConfig } from '@/lib/types/settings';
 
 // ---------------------------------------------------------------------------
 // Mocks — must be defined before importing the store
@@ -98,43 +99,22 @@ vi.mock('@/lib/audio/constants', () => ({
     'openai-tts': 'alloy',
     'browser-native-tts': 'default',
   },
+  getDefaultTTSVoice: (providerId: 'openai-tts' | 'azure-tts' | 'browser-native-tts') =>
+    ({
+      'openai-tts': 'alloy',
+      'azure-tts': 'zh-CN-XiaoxiaoNeural',
+      'browser-native-tts': 'default',
+    })[providerId] || 'default',
 }));
 
 vi.mock('@/lib/audio/types', () => ({}));
 
 vi.mock('@/lib/pdf/constants', () => ({
   PDF_PROVIDERS: {
-    unpdf: { id: 'unpdf', requiresApiKey: false },
-    mineru: { id: 'mineru', requiresApiKey: false },
-  },
-}));
-
-vi.mock('@/lib/media/image-providers', () => ({
-  IMAGE_PROVIDERS: {
-    seedream: {
-      id: 'seedream',
-      requiresApiKey: true,
-      models: [{ id: 'doubao-seedream-5-0-260128', name: 'Seedream 5.0' }],
-    },
-    'qwen-image': {
-      id: 'qwen-image',
-      requiresApiKey: true,
-      models: [{ id: 'qwen-image-max', name: 'Qwen Image Max' }],
-    },
-  },
-}));
-
-vi.mock('@/lib/media/video-providers', () => ({
-  VIDEO_PROVIDERS: {
-    seedance: {
-      id: 'seedance',
-      requiresApiKey: true,
-      models: [{ id: 'doubao-seedance-1-5-pro-251215', name: 'Seedance 1.5 Pro' }],
-    },
-    kling: {
-      id: 'kling',
-      requiresApiKey: true,
-      models: [{ id: 'kling-v2-6', name: 'Kling V2' }],
+    'mineru-local': {
+      id: 'mineru-local',
+      requiresApiKey: false,
+      baseUrl: 'http://localhost:50002',
     },
   },
 }));
@@ -154,11 +134,13 @@ vi.stubGlobal('fetch', mockFetch);
 
 // Stub localStorage
 const storage = new Map<string, string>();
-vi.stubGlobal('localStorage', {
+const localStorageMock = {
   getItem: (key: string) => storage.get(key) ?? null,
   setItem: (key: string, value: string) => storage.set(key, value),
   removeItem: (key: string) => storage.delete(key),
-});
+};
+vi.stubGlobal('localStorage', localStorageMock);
+vi.stubGlobal('window', { localStorage: localStorageMock });
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -170,8 +152,7 @@ interface MockServerResponse {
   tts?: Record<string, { baseUrl?: string }>;
   asr?: Record<string, { baseUrl?: string }>;
   pdf?: Record<string, { baseUrl?: string }>;
-  image?: Record<string, Record<string, never>>;
-  video?: Record<string, Record<string, never>>;
+  vector?: Record<string, { models?: string[]; baseUrl?: string }>;
   webSearch?: Record<string, { baseUrl?: string }>;
 }
 
@@ -183,8 +164,7 @@ function mockServerResponse(overrides: MockServerResponse = {}) {
       tts: {},
       asr: {},
       pdf: {},
-      image: {},
-      video: {},
+      vector: {},
       webSearch: {},
       ...overrides,
     }),
@@ -194,6 +174,420 @@ function mockServerResponse(overrides: MockServerResponse = {}) {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe('slide layout review setting', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    storage.clear();
+    mockFetch.mockReset();
+  });
+
+  async function getStore() {
+    const { useSettingsStore } = await import('@/lib/store/settings');
+    return useSettingsStore;
+  }
+
+  it('defaults to disabled and can be changed', async () => {
+    const store = await getStore();
+
+    expect(store.getState().slideLayoutReviewEnabled).toBe(false);
+    store.getState().setSlideLayoutReviewEnabled(true);
+    expect(store.getState().slideLayoutReviewEnabled).toBe(true);
+  });
+
+  it('migrates older settings without the field to disabled', async () => {
+    storage.set(
+      'settings-storage',
+      JSON.stringify({
+        state: { providerId: 'openai', modelId: '' },
+        version: 3,
+      }),
+    );
+
+    const store = await getStore();
+    await store.persist.rehydrate();
+
+    expect(store.getState().slideLayoutReviewEnabled).toBe(false);
+  });
+});
+
+describe('provider deletion persistence', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    storage.clear();
+    mockFetch.mockReset();
+  });
+
+  async function getStore() {
+    const { useSettingsStore } = await import('@/lib/store/settings');
+    return useSettingsStore;
+  }
+
+  it('records deleted built-in providers when provider config removes one', async () => {
+    const store = await getStore();
+    const { openai: _openai, ...withoutOpenAI } = store.getState().providersConfig;
+
+    store.getState().setProvidersConfig(withoutOpenAI as ProvidersConfig);
+
+    expect(store.getState().providersConfig.openai).toBeUndefined();
+    expect(store.getState().deletedBuiltInProviderIds).toContain('openai');
+  });
+
+  it('does not restore deleted built-in providers on rehydrate', async () => {
+    storage.set(
+      'settings-storage',
+      JSON.stringify({
+        state: {
+          providerId: 'anthropic',
+          modelId: 'claude-sonnet-4-6',
+          deletedBuiltInProviderIds: ['openai'],
+          providersConfig: {
+            anthropic: {
+              apiKey: '',
+              baseUrl: '',
+              models: [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }],
+              name: 'Anthropic',
+              type: 'anthropic',
+              defaultBaseUrl: 'https://api.anthropic.com',
+              icon: '/logos/anthropic.svg',
+              requiresApiKey: true,
+              isBuiltIn: true,
+            },
+          },
+        },
+        version: 2,
+      }),
+    );
+
+    const store = await getStore();
+    await store.persist.rehydrate();
+
+    expect(store.getState().providersConfig.openai).toBeUndefined();
+    expect(store.getState().providersConfig.anthropic).toBeDefined();
+    expect(store.getState().deletedBuiltInProviderIds).toEqual(['openai']);
+  });
+
+  it('does not restore built-in models on rehydrate after the user deletes them all', async () => {
+    storage.set(
+      'settings-storage',
+      JSON.stringify({
+        state: {
+          providerId: 'openai',
+          modelId: '',
+          providersConfig: {
+            openai: {
+              apiKey: '',
+              baseUrl: '',
+              models: [],
+              modelsCustomized: true,
+              name: 'OpenAI',
+              type: 'openai',
+              defaultBaseUrl: 'https://api.openai.com/v1',
+              icon: '/logos/openai.svg',
+              requiresApiKey: true,
+              isBuiltIn: true,
+            },
+          },
+        },
+        version: 2,
+      }),
+    );
+
+    const store = await getStore();
+    await store.persist.rehydrate();
+
+    expect(store.getState().providersConfig.openai.models).toEqual([]);
+    expect(store.getState().providersConfig.openai.modelsCustomized).toBe(true);
+  });
+
+  it('keeps a persisted empty built-in model list from older builds', async () => {
+    storage.set(
+      'settings-storage',
+      JSON.stringify({
+        state: {
+          providerId: 'openai',
+          modelId: '',
+          providersConfig: {
+            openai: {
+              apiKey: '',
+              baseUrl: '',
+              models: [],
+              name: 'OpenAI',
+              type: 'openai',
+              defaultBaseUrl: 'https://api.openai.com/v1',
+              icon: '/logos/openai.svg',
+              requiresApiKey: true,
+              isBuiltIn: true,
+            },
+          },
+        },
+        version: 2,
+      }),
+    );
+
+    const store = await getStore();
+    await store.persist.rehydrate();
+
+    expect(store.getState().providersConfig.openai.models).toEqual([]);
+  });
+
+  it('keeps a persisted built-in model list instead of re-adding defaults on rehydrate', async () => {
+    storage.set(
+      'settings-storage',
+      JSON.stringify({
+        state: {
+          providerId: 'openai',
+          modelId: 'gpt-4o-mini',
+          providersConfig: {
+            openai: {
+              apiKey: '',
+              baseUrl: '',
+              models: [{ id: 'gpt-4o-mini', name: 'GPT-4o Mini' }],
+              name: 'OpenAI',
+              type: 'openai',
+              defaultBaseUrl: 'https://api.openai.com/v1',
+              icon: '/logos/openai.svg',
+              requiresApiKey: true,
+              isBuiltIn: true,
+            },
+          },
+        },
+        version: 2,
+      }),
+    );
+
+    const store = await getStore();
+    await store.persist.rehydrate();
+
+    expect(store.getState().providersConfig.openai.models.map((model) => model.id)).toEqual([
+      'gpt-4o-mini',
+    ]);
+  });
+
+  it('migrates old default auto agent mode back to preset and defaults role generation to lightweight model', async () => {
+    storage.set(
+      'settings-storage',
+      JSON.stringify({
+        state: {
+          agentMode: 'auto',
+        },
+        version: 2,
+      }),
+    );
+
+    const store = await getStore();
+    await store.persist.rehydrate();
+
+    expect(store.getState().agentMode).toBe('preset');
+    expect(store.getState().agentGenerationModelProfile).toBe('lightweight');
+  });
+
+  it('keeps explicitly persisted auto agent mode after the migration version', async () => {
+    storage.set(
+      'settings-storage',
+      JSON.stringify({
+        state: {
+          agentMode: 'auto',
+          agentGenerationModelProfile: 'main',
+        },
+        version: 3,
+      }),
+    );
+
+    const store = await getStore();
+    await store.persist.rehydrate();
+
+    expect(store.getState().agentMode).toBe('auto');
+    expect(store.getState().agentGenerationModelProfile).toBe('main');
+  });
+
+  it('does not restore lightweight built-in models after the user deletes them all', async () => {
+    storage.set(
+      'settings-storage',
+      JSON.stringify({
+        state: {
+          lightweightProviderId: 'openai',
+          lightweightModelId: '',
+          lightweightProvidersConfig: {
+            openai: {
+              apiKey: '',
+              baseUrl: '',
+              models: [],
+              modelsCustomized: true,
+              name: 'OpenAI',
+              type: 'openai',
+              defaultBaseUrl: 'https://api.openai.com/v1',
+              icon: '/logos/openai.svg',
+              requiresApiKey: true,
+              isBuiltIn: true,
+            },
+          },
+        },
+        version: 2,
+      }),
+    );
+
+    const store = await getStore();
+    await store.persist.rehydrate();
+
+    expect(store.getState().lightweightProvidersConfig.openai.models).toEqual([]);
+    expect(store.getState().lightweightProvidersConfig.openai.modelsCustomized).toBe(true);
+  });
+
+  it('does not expose Claude as a built-in lightweight provider', async () => {
+    const store = await getStore();
+    await store.persist.rehydrate();
+
+    expect(store.getState().providersConfig.anthropic).toBeDefined();
+    expect(store.getState().lightweightProvidersConfig.anthropic).toBeUndefined();
+  });
+
+  it('removes persisted Claude lightweight provider bindings on rehydrate', async () => {
+    storage.set(
+      'settings-storage',
+      JSON.stringify({
+        state: {
+          lightweightProviderId: 'anthropic',
+          lightweightModelId: 'claude-haiku-4-5',
+          lightweightProvidersConfig: {
+            anthropic: {
+              apiKey: '',
+              baseUrl: '',
+              models: [{ id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' }],
+              name: 'Anthropic',
+              type: 'anthropic',
+              defaultBaseUrl: 'https://api.anthropic.com',
+              icon: '/logos/anthropic.svg',
+              requiresApiKey: true,
+              isBuiltIn: true,
+            },
+          },
+        },
+        version: 3,
+      }),
+    );
+
+    const store = await getStore();
+    await store.persist.rehydrate();
+
+    expect(store.getState().lightweightProvidersConfig.anthropic).toBeUndefined();
+    expect(store.getState().lightweightProviderId).not.toBe('anthropic');
+    expect(store.getState().lightweightModelId).not.toBe('claude-haiku-4-5');
+  });
+
+  const serviceProviderCases = [
+    [
+      'TTS',
+      'openai-tts',
+      'ttsProvidersConfig',
+      'deletedBuiltInTTSProviderIds',
+      'deleteTTSProvider',
+      'restoreTTSProvider',
+    ],
+    [
+      'ASR',
+      'openai-whisper',
+      'asrProvidersConfig',
+      'deletedBuiltInASRProviderIds',
+      'deleteASRProvider',
+      'restoreASRProvider',
+    ],
+    [
+      'PDF',
+      'mineru-local',
+      'pdfProvidersConfig',
+      'deletedBuiltInPDFProviderIds',
+      'deletePDFProvider',
+      'restorePDFProvider',
+    ],
+    [
+      'web search',
+      'tavily',
+      'webSearchProvidersConfig',
+      'deletedBuiltInWebSearchProviderIds',
+      'deleteWebSearchProvider',
+      'restoreWebSearchProvider',
+    ],
+  ] as const;
+
+  it.each(serviceProviderCases)(
+    'records and restores deleted built-in %s providers',
+    async (_label, providerId, configKey, deletedKey, deleteAction, restoreAction) => {
+      const store = await getStore();
+      const initialState = store.getState() as unknown as Record<string, unknown>;
+
+      (initialState[deleteAction] as (id: string) => void)(providerId);
+
+      const deletedState = store.getState() as unknown as Record<string, unknown>;
+      expect((deletedState[configKey] as Record<string, unknown>)[providerId]).toBeUndefined();
+      expect(deletedState[deletedKey] as string[]).toContain(providerId);
+
+      (deletedState[restoreAction] as (id: string) => void)(providerId);
+
+      const restoredState = store.getState() as unknown as Record<string, unknown>;
+      expect((restoredState[configKey] as Record<string, unknown>)[providerId]).toBeDefined();
+      expect(restoredState[deletedKey] as string[]).not.toContain(providerId);
+    },
+  );
+
+  it.each([
+    [
+      'TTS',
+      'openai-tts',
+      'ttsProvidersConfig',
+      'deletedBuiltInTTSProviderIds',
+      {
+        ttsProviderId: 'browser-native-tts',
+        ttsProvidersConfig: {
+          'browser-native-tts': { apiKey: '', baseUrl: '', enabled: true },
+        },
+        deletedBuiltInTTSProviderIds: ['openai-tts'],
+      },
+    ],
+    [
+      'ASR',
+      'openai-whisper',
+      'asrProvidersConfig',
+      'deletedBuiltInASRProviderIds',
+      {
+        asrProviderId: 'browser-native',
+        asrProvidersConfig: {
+          'browser-native': { apiKey: '', baseUrl: '', enabled: true },
+        },
+        deletedBuiltInASRProviderIds: ['openai-whisper'],
+      },
+    ],
+    [
+      'web search',
+      'tavily',
+      'webSearchProvidersConfig',
+      'deletedBuiltInWebSearchProviderIds',
+      {
+        webSearchProviderId: 'tavily',
+        webSearchProvidersConfig: {},
+        deletedBuiltInWebSearchProviderIds: ['tavily'],
+      },
+    ],
+  ] as const)(
+    'does not restore deleted built-in %s providers on rehydrate',
+    async (_label, providerId, configKey, deletedKey, persistedState) => {
+      storage.set(
+        'settings-storage',
+        JSON.stringify({
+          state: persistedState,
+          version: 2,
+        }),
+      );
+
+      const store = await getStore();
+      await store.persist.rehydrate();
+
+      const state = store.getState() as unknown as Record<string, unknown>;
+      expect((state[configKey] as Record<string, unknown>)[providerId]).toBeUndefined();
+      expect(state[deletedKey] as string[]).toEqual([providerId]);
+    },
+  );
+});
 
 describe('fetchServerProviders — provider availability sync', () => {
   beforeEach(() => {
@@ -222,8 +616,8 @@ describe('fetchServerProviders — provider availability sync', () => {
     const config = store.getState().providersConfig.openai;
     const modelIds = config.models.map((m) => m.id);
     expect(modelIds).toEqual(['gpt-4o']);
-    expect(modelIds).not.toContain('gpt-4o-mini');
-    expect(modelIds).not.toContain('gpt-4-turbo');
+    expect(modelIds.includes('gpt-4o-mini')).toBe(false);
+    expect(modelIds.includes('gpt-4-turbo')).toBe(false);
   });
 
   it('keeps all models when server provides no model restriction', async () => {
@@ -266,7 +660,7 @@ describe('fetchServerProviders — provider availability sync', () => {
     await store.getState().fetchServerProviders();
     const modelIds = store.getState().providersConfig.openai.models.map((m) => m.id);
     expect(modelIds).toEqual(['gpt-4o']);
-    expect(modelIds).not.toContain('gpt-4o-mini');
+    expect(modelIds.includes('gpt-4o-mini')).toBe(false);
   });
 
   // ---- Provider availability flags ----
@@ -450,7 +844,7 @@ describe('fetchServerProviders — provider availability sync', () => {
     mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
     // Should not throw — server providers are optional
-    await expect(store.getState().fetchServerProviders()).resolves.not.toThrow();
+    await store.getState().fetchServerProviders();
   });
 });
 
@@ -559,21 +953,35 @@ describe('fetchServerProviders — PDF stale selection', () => {
     return useSettingsStore;
   }
 
-  it('falls back to unpdf when mineru loses server config', async () => {
+  it('falls back to mineru-local when persisted PDF provider is stale', async () => {
     const store = await getStore();
-
-    mockServerResponse({ pdf: { mineru: {} } });
-    await store.getState().fetchServerProviders();
-    store.getState().setPDFProvider('mineru');
 
     mockServerResponse({});
     await store.getState().fetchServerProviders();
 
-    expect(store.getState().pdfProviderId).toBe('unpdf');
+    store.setState({ pdfProviderId: 'mineru' as unknown as 'mineru-local' });
+
+    mockServerResponse({});
+    await store.getState().fetchServerProviders();
+
+    expect(store.getState().pdfProviderId).toBe('mineru-local');
+  });
+
+  it('marks MinerU local PDF provider as server-configured', async () => {
+    const store = await getStore();
+
+    mockServerResponse({ pdf: { 'mineru-local': { baseUrl: 'http://localhost:50002' } } });
+    await store.getState().fetchServerProviders();
+
+    expect(store.getState().pdfProviderId).toBe('mineru-local');
+    expect(store.getState().pdfProvidersConfig['mineru-local'].isServerConfigured).toBe(true);
+    expect(store.getState().pdfProvidersConfig['mineru-local'].serverBaseUrl).toBe(
+      'http://localhost:50002',
+    );
   });
 });
 
-describe('fetchServerProviders — Image stale selection', () => {
+describe('fetchServerProviders — Vector sync', () => {
   beforeEach(() => {
     vi.resetModules();
     storage.clear();
@@ -585,224 +993,89 @@ describe('fetchServerProviders — Image stale selection', () => {
     return useSettingsStore;
   }
 
-  it('clears imageProviderId and imageModelId when provider loses server config', async () => {
+  it('marks vector providers as server-configured and stores server models', async () => {
     const store = await getStore();
 
-    mockServerResponse({ image: { seedream: {} } });
+    mockServerResponse({
+      vector: {
+        'openai-embedding': {
+          baseUrl: 'https://proxy.example.com/v1',
+          models: ['text-embedding-3-small', 'text-embedding-3-large'],
+        },
+      },
+    });
     await store.getState().fetchServerProviders();
-    store.getState().setImageProvider('seedream');
-    store.getState().setImageModelId('doubao-seedream-5-0-260128');
 
-    mockServerResponse({});
-    await store.getState().fetchServerProviders();
-
-    expect(store.getState().imageProviderId).toBe('');
-    expect(store.getState().imageModelId).toBe('');
+    const config = store.getState().vectorProvidersConfig['openai-embedding'];
+    expect(config.isServerConfigured).toBe(true);
+    expect(config.serverBaseUrl).toBe('https://proxy.example.com/v1');
+    expect(config.models).toEqual([
+      { id: 'text-embedding-3-small', name: 'text-embedding-3-small' },
+      { id: 'text-embedding-3-large', name: 'text-embedding-3-large' },
+    ]);
   });
 
-  it('disables imageGenerationEnabled when no image provider is usable', async () => {
+  it('does not leave the stale vector provider selected when server config changes', async () => {
     const store = await getStore();
 
-    // Server configures seedream, user enables image generation
-    mockServerResponse({ image: { seedream: {} } });
+    mockServerResponse({
+      vector: {
+        'openai-embedding': { baseUrl: 'https://proxy.example.com/v1' },
+        'qwen-embedding': { baseUrl: 'https://proxy.qwen.com/v1' },
+      },
+    });
     await store.getState().fetchServerProviders();
-    store.getState().setImageProvider('seedream');
-    store.getState().setImageGenerationEnabled(true);
-    expect(store.getState().imageGenerationEnabled).toBe(true);
-
-    // Server removes all image providers
-    mockServerResponse({});
-    await store.getState().fetchServerProviders();
-
-    expect(store.getState().imageGenerationEnabled).toBe(false);
-  });
-
-  it('prevents enabling image generation when no image provider is usable', async () => {
-    const store = await getStore();
-
-    // No server image providers
-    mockServerResponse({});
-    await store.getState().fetchServerProviders();
-
-    // User tries to enable image generation
-    store.getState().setImageGenerationEnabled(true);
-    expect(store.getState().imageGenerationEnabled).toBe(false);
-  });
-
-  it('preserves user-disabled image generation across server syncs', async () => {
-    const store = await getStore();
-
-    // Server has seedream, auto-enabled on first sync
-    mockServerResponse({ image: { seedream: {} } });
-    await store.getState().fetchServerProviders();
-    expect(store.getState().imageGenerationEnabled).toBe(true);
-
-    // User intentionally disables
-    store.getState().setImageGenerationEnabled(false);
-    expect(store.getState().imageGenerationEnabled).toBe(false);
-
-    // Next server sync — same config, should NOT re-enable
-    mockServerResponse({ image: { seedream: {} } });
-    await store.getState().fetchServerProviders();
-    expect(store.getState().imageGenerationEnabled).toBe(false);
-  });
-
-  it('falls back to another server-configured image provider', async () => {
-    const store = await getStore();
-
-    mockServerResponse({ image: { seedream: {}, 'qwen-image': {} } });
-    await store.getState().fetchServerProviders();
-    store.getState().setImageProvider('seedream');
-    store.getState().setImageModelId('doubao-seedream-5-0-260128');
-
-    mockServerResponse({ image: { 'qwen-image': {} } });
-    await store.getState().fetchServerProviders();
-
-    expect(store.getState().imageProviderId).toBe('qwen-image');
-    expect(store.getState().imageModelId).toBe('qwen-image-max');
-  });
-
-  it('auto-selects provider and model when server adds image provider after empty state', async () => {
-    const store = await getStore();
-
-    // Start with no image providers — selection is empty, generation disabled
-    mockServerResponse({});
-    await store.getState().fetchServerProviders();
-    expect(store.getState().imageProviderId).toBe('');
-    expect(store.getState().imageModelId).toBe('');
-    expect(store.getState().imageGenerationEnabled).toBe(false);
-
-    // Server adds seedream
-    mockServerResponse({ image: { seedream: {} } });
-    await store.getState().fetchServerProviders();
-
-    expect(store.getState().imageProviderId).toBe('seedream');
-    expect(store.getState().imageModelId).toBe('doubao-seedream-5-0-260128');
-    // Provider recovered but generation stays off — user enables manually
-    expect(store.getState().imageGenerationEnabled).toBe(false);
-  });
-
-  it('auto-enables image generation on first load when server has image provider', async () => {
-    const store = await getStore();
-
-    // First ever fetchServerProviders — server has seedream
-    // Default state: imageProviderId='seedream', imageGenerationEnabled=false, autoConfigApplied=false
-    mockServerResponse({ image: { seedream: {} } });
-    await store.getState().fetchServerProviders();
-
-    expect(store.getState().imageGenerationEnabled).toBe(true);
-    expect(store.getState().imageProviderId).toBe('seedream');
-    expect(store.getState().imageModelId).toBe('doubao-seedream-5-0-260128');
-  });
-
-  it('does not force-enable when provider is already set but generation was disabled', async () => {
-    const store = await getStore();
-
-    // autoConfigApplied=true, provider already set, generation off (user choice)
-    mockServerResponse({});
-    await store.getState().fetchServerProviders(); // sets autoConfigApplied=true
-
-    store.setState({
-      imageProviderId: 'seedream',
-      imageModelId: '',
-      imageGenerationEnabled: false,
+    store.getState().setVectorProvider('openai-embedding');
+    store.getState().setVectorProviderConfig('openai-embedding', {
+      apiKey: '',
+      baseUrl: '',
     });
 
-    // Server has seedream — should NOT force-enable (provider was already set)
-    mockServerResponse({ image: { seedream: {} } });
+    mockServerResponse({
+      vector: {
+        'qwen-embedding': { baseUrl: 'https://proxy.qwen.com/v1' },
+      },
+    });
     await store.getState().fetchServerProviders();
 
-    expect(store.getState().imageGenerationEnabled).toBe(false);
-    // But model should be auto-filled
-    expect(store.getState().imageModelId).toBe('doubao-seedream-5-0-260128');
-  });
-});
-
-describe('fetchServerProviders — Video stale selection', () => {
-  beforeEach(() => {
-    vi.resetModules();
-    storage.clear();
-    mockFetch.mockReset();
+    expect(store.getState().vectorProviderId).not.toBe('openai-embedding');
+    expect(store.getState().vectorProvidersConfig['qwen-embedding'].isServerConfigured).toBe(true);
   });
 
-  async function getStore() {
-    const { useSettingsStore } = await import('@/lib/store/settings');
-    return useSettingsStore;
-  }
+  it('migrates retired local BGE vector config into SiliconFlow without stale branding', async () => {
+    storage.set(
+      'settings-storage',
+      JSON.stringify({
+        state: {
+          vectorProviderId: 'chinese-xinhua-local',
+          vectorProvidersConfig: {
+            'chinese-xinhua-local': {
+              apiKey: '',
+              baseUrl: 'http://localhost:50003',
+              enabled: true,
+              modelId: 'BAAI/bge-base-zh-v1.5',
+              name: '本地新华字典向量',
+              icon: '/logos/bailian.svg',
+              requiresApiKey: false,
+            },
+          },
+        },
+        version: 2,
+      }),
+    );
 
-  it('clears videoProviderId and videoModelId when provider loses server config', async () => {
     const store = await getStore();
+    await store.persist.rehydrate();
 
-    mockServerResponse({ video: { seedance: {} } });
-    await store.getState().fetchServerProviders();
-    store.getState().setVideoProvider('seedance');
-    store.getState().setVideoModelId('doubao-seedance-1-5-pro-251215');
-
-    mockServerResponse({});
-    await store.getState().fetchServerProviders();
-
-    expect(store.getState().videoProviderId).toBe('');
-    expect(store.getState().videoModelId).toBe('');
-  });
-
-  it('disables videoGenerationEnabled when no video provider is usable', async () => {
-    const store = await getStore();
-
-    mockServerResponse({ video: { seedance: {} } });
-    await store.getState().fetchServerProviders();
-    store.getState().setVideoProvider('seedance');
-    store.getState().setVideoGenerationEnabled(true);
-    expect(store.getState().videoGenerationEnabled).toBe(true);
-
-    mockServerResponse({});
-    await store.getState().fetchServerProviders();
-
-    expect(store.getState().videoGenerationEnabled).toBe(false);
-  });
-
-  it('prevents enabling video generation when no video provider is usable', async () => {
-    const store = await getStore();
-
-    mockServerResponse({});
-    await store.getState().fetchServerProviders();
-
-    store.getState().setVideoGenerationEnabled(true);
-    expect(store.getState().videoGenerationEnabled).toBe(false);
-  });
-
-  it('falls back to another server-configured video provider', async () => {
-    const store = await getStore();
-
-    mockServerResponse({ video: { seedance: {}, kling: {} } });
-    await store.getState().fetchServerProviders();
-    store.getState().setVideoProvider('seedance');
-    store.getState().setVideoModelId('doubao-seedance-1-5-pro-251215');
-
-    mockServerResponse({ video: { kling: {} } });
-    await store.getState().fetchServerProviders();
-
-    expect(store.getState().videoProviderId).toBe('kling');
-    expect(store.getState().videoModelId).toBe('kling-v2-6');
-  });
-
-  it('auto-selects provider and model when server adds video provider after empty state', async () => {
-    const store = await getStore();
-
-    // Start with no video providers — generation disabled
-    mockServerResponse({});
-    await store.getState().fetchServerProviders();
-    expect(store.getState().videoProviderId).toBe('');
-    expect(store.getState().videoModelId).toBe('');
-    expect(store.getState().videoGenerationEnabled).toBe(false);
-
-    // Server adds seedance
-    mockServerResponse({ video: { seedance: {} } });
-    await store.getState().fetchServerProviders();
-
-    expect(store.getState().videoProviderId).toBe('seedance');
-    expect(store.getState().videoModelId).toBe('doubao-seedance-1-5-pro-251215');
-    // Provider recovered but generation stays off — user enables manually
-    expect(store.getState().videoGenerationEnabled).toBe(false);
+    const state = store.getState();
+    const config = state.vectorProvidersConfig.siliconflow;
+    expect(state.vectorProviderId).toBe('siliconflow');
+    expect(state.vectorProvidersConfig['chinese-xinhua-local']).toBeUndefined();
+    expect(config.modelId).toBe('BAAI/bge-base-zh-v1.5');
+    expect(config.baseUrl).toBe('http://localhost:50003');
+    expect(config.requiresApiKey).toBe(false);
+    expect(config.name).toBeUndefined();
+    expect(config.icon).toBeUndefined();
   });
 });
 
@@ -839,5 +1112,20 @@ describe('fetchServerProviders — LLM cross-provider fallback', () => {
 
     expect(store.getState().providerId).toBe('anthropic');
     expect(store.getState().modelId).toBe('claude-sonnet-4-6');
+  });
+
+  it('does not mirror server-configured Claude into lightweight providers', async () => {
+    const store = await getStore();
+
+    mockServerResponse({
+      providers: {
+        openai: { models: ['gpt-4o-mini'] },
+        anthropic: { models: ['claude-sonnet-4-6'] },
+      },
+    });
+    await store.getState().fetchServerProviders();
+
+    expect(store.getState().providersConfig.anthropic?.isServerConfigured).toBe(true);
+    expect(store.getState().lightweightProvidersConfig.anthropic).toBeUndefined();
   });
 });

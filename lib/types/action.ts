@@ -23,7 +23,7 @@ export interface ActionBase {
 export interface SpotlightAction extends ActionBase {
   type: 'spotlight';
   elementId: string;
-  dimOpacity?: number; // default 0.5
+  dimOpacity?: number; // default 0.24, clamped to max 0.42
 }
 
 /** Laser — point at an element with a laser effect */
@@ -161,6 +161,27 @@ export interface DiscussionAction extends ActionBase {
   agentId?: string;
 }
 
+/** Wait for the student to teach back on the whiteboard and send an explanation */
+export interface WaitForUserTeachingAction extends ActionBase {
+  type: 'wait_for_user_teaching';
+  prompt?: string;
+}
+
+export const REQUEST_CLARIFICATION_ACTION = 'request_clarification' as const;
+export const DEFAULT_REQUEST_CLARIFICATION_MESSAGE =
+  '你画的这部分线条有点密集，我看得不是很确切，你能用语音再补充解释一下这里的连线逻辑吗？';
+
+/**
+ * Request clarification when visual evidence is too ambiguous to judge safely.
+ * This is the Vision hallucination fallback path.
+ */
+export interface RequestClarificationAction extends ActionBase {
+  type: typeof REQUEST_CLARIFICATION_ACTION;
+  message?: string;
+  reason?: string;
+  visionConfidence?: number;
+}
+
 // ==================== Union type ====================
 
 export type Action =
@@ -178,7 +199,9 @@ export type Action =
   | WbClearAction
   | WbDeleteAction
   | WbCloseAction
-  | DiscussionAction;
+  | DiscussionAction
+  | WaitForUserTeachingAction
+  | RequestClarificationAction;
 
 export type ActionType = Action['type'];
 
@@ -187,6 +210,9 @@ export const FIRE_AND_FORGET_ACTIONS: ActionType[] = ['spotlight', 'laser'];
 
 /** Action types that only work on slide scenes (require slide canvas elements) */
 export const SLIDE_ONLY_ACTIONS: ActionType[] = ['spotlight', 'laser'];
+
+/** Safety actions are always available, independent of agent role settings. */
+export const SAFETY_ACTIONS: ActionType[] = [REQUEST_CLARIFICATION_ACTION];
 
 /** Action types that must complete before the next action runs */
 export const SYNC_ACTIONS: ActionType[] = [
@@ -203,6 +229,8 @@ export const SYNC_ACTIONS: ActionType[] = [
   'wb_delete',
   'wb_close',
   'discussion',
+  'wait_for_user_teaching',
+  REQUEST_CLARIFICATION_ACTION,
 ];
 
 // ==================== Canvas utility types (non-action) ====================

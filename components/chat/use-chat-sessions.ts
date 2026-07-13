@@ -9,7 +9,18 @@ import type {
   DirectorState,
 } from '@/lib/types/chat';
 import type { DiscussionRequest } from '@/components/roundtable';
-import type { Action, SpotlightAction, DiscussionAction } from '@/lib/types/action';
+import type {
+  Action,
+  SpotlightAction,
+  DiscussionAction,
+  WaitForUserTeachingAction,
+} from '@/lib/types/action';
+import type {
+  WhiteboardActionRecord,
+  WhiteboardLedgerRecord,
+  WhiteboardLedgerSummaryRecord,
+} from '@/lib/orchestration/director-prompt';
+import { isWhiteboardLedgerSummary } from '@/lib/orchestration/director-prompt';
 import type { UIMessage } from 'ai';
 import { useStageStore } from '@/lib/store';
 import { useCanvasStore } from '@/lib/store/canvas';
@@ -17,7 +28,7 @@ import { useSettingsStore } from '@/lib/store/settings';
 import { useUserProfileStore } from '@/lib/store/user-profile';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { getCurrentModelConfig } from '@/lib/utils/model-config';
+import { getCurrentModelConfig, resolveChatModelConfig } from '@/lib/utils/model-config';
 import { USER_AVATAR } from '@/lib/types/roundtable';
 import { processSSEStream } from './process-sse-stream';
 import { StreamBuffer } from '@/lib/buffer/stream-buffer';
@@ -25,14 +36,167 @@ import type { AgentStartItem, ActionItem } from '@/lib/buffer/stream-buffer';
 import { ActionEngine } from '@/lib/action/engine';
 import { toast } from 'sonner';
 import { createLogger } from '@/lib/logger';
+import { recordDebateJudgmentEvidence } from '@/lib/learning/profile-engine';
 
 const log = createLogger('ChatSessions');
+const MAX_LEDGER_ENTRIES = 10;
+
+export interface SendMessageOptions {
+  hidden?: boolean;
+  attachments?: ChatMessageAttachment[];
+}
+
+export interface ChatMessageAttachment {
+  type: 'image';
+  mediaType: string;
+  url: string;
+  filename?: string;
+}
+
+function summarizeLedgerRecord(record: WhiteboardLedgerRecord): string {
+  if (isWhiteboardLedgerSummary(record)) {
+    return record.content;
+  }
+
+  const actor =
+    record.actorName || record.agentName || record.agentId || record.userId || 'unknown';
+  const params = record.params;
+
+  switch (record.actionName) {
+    case 'wb_draw_text':
+      return `${actor} drew text "${String(params.content || '').slice(0, 48)}"`;
+    case 'wb_draw_shape':
+      return `${actor} drew shape ${String(params.shape || params.type || 'shape')} at (${params.x ?? '?'},${params.y ?? '?'})`;
+    case 'wb_draw_line':
+      return `${actor} drew line (${params.startX ?? '?'},${params.startY ?? '?'}) -> (${params.endX ?? '?'},${params.endY ?? '?'})`;
+    case 'wb_clear':
+      return `${actor} cleared the whiteboard`;
+    case 'wb_delete':
+      return `${actor} deleted element ${String(params.elementId || 'unknown')}`;
+    default:
+      return `${actor} performed ${record.actionName}`;
+  }
+}
+
+function stableLedgerValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableLedgerValue);
+  }
+  if (typeof value === 'object' && value !== null) {
+    return Object.keys(value as Record<string, unknown>)
+      .sort()
+      .reduce<Record<string, unknown>>((acc, key) => {
+        acc[key] = stableLedgerValue((value as Record<string, unknown>)[key]);
+        return acc;
+      }, {});
+  }
+  return value;
+}
+
+function getWhiteboardActionDedupeKeys(record: WhiteboardActionRecord): string[] {
+  const actor =
+    record.agentId || record.userId || record.actorName || record.agentName || 'unknown';
+  const semanticKey = JSON.stringify([
+    record.actionName,
+    record.actorType ?? 'unknown',
+    actor,
+    stableLedgerValue(record.params),
+  ]);
+  return record.recordId ? [record.recordId, semanticKey] : [semanticKey];
+}
+
+async function summarizeLedger(
+  ledger: WhiteboardLedgerRecord[] | undefined,
+): Promise<WhiteboardLedgerRecord[]> {
+  if (!ledger || ledger.length === 0) return [];
+  if (ledger.length <= MAX_LEDGER_ENTRIES) return ledger;
+
+  const recentEntryCount = MAX_LEDGER_ENTRIES - 1;
+  const recordsToSummarize = ledger.slice(0, -recentEntryCount);
+  const recentRecords = ledger.slice(-recentEntryCount);
+
+  // TODO: call summarization AI
+  await Promise.resolve();
+
+  const summaryContent = recordsToSummarize
+    .map(summarizeLedgerRecord)
+    .filter(Boolean)
+    .join('; ')
+    .slice(0, 900);
+  const latestTimestamp = recordsToSummarize.reduce((latest, record) => {
+    const timestamp = 'timestamp' in record ? record.timestamp : undefined;
+    return Math.max(latest, timestamp ?? 0);
+  }, 0);
+  const summaryRecord: WhiteboardLedgerSummaryRecord = {
+    type: 'summary',
+    content: summaryContent || `Compressed ${recordsToSummarize.length} earlier whiteboard events.`,
+    sourceCount: recordsToSummarize.reduce(
+      (count, record) => count + (isWhiteboardLedgerSummary(record) ? record.sourceCount : 1),
+      0,
+    ),
+    timestamp: latestTimestamp || Date.now(),
+  };
+
+  return [summaryRecord, ...recentRecords];
+}
+
+function buildUserMessageParts(
+  content: string,
+  attachments: ChatMessageAttachment[] | undefined,
+): UIMessage<ChatMessageMetadata>['parts'] {
+  const parts: UIMessage<ChatMessageMetadata>['parts'] = [{ type: 'text', text: content }];
+
+  if (!attachments?.length) {
+    return parts;
+  }
+
+  for (const attachment of attachments) {
+    if (!attachment.url || !attachment.mediaType.startsWith('image/')) {
+      log.warn('[ChatArea] Ignoring unsupported message attachment:', {
+        type: attachment.type,
+        mediaType: attachment.mediaType,
+      });
+      continue;
+    }
+
+    parts.push({
+      type: 'image_url',
+      image_url: { url: attachment.url },
+      mediaType: attachment.mediaType,
+      filename: attachment.filename,
+    } as unknown as UIMessage<ChatMessageMetadata>['parts'][number]);
+  }
+
+  return parts;
+}
+
+function extractMessageText(message: UIMessage<ChatMessageMetadata>): string {
+  return (message.parts || [])
+    .map((part) => {
+      const p = part as Record<string, unknown>;
+      return p.type === 'text' && typeof p.text === 'string' ? p.text.trim() : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function getLatestVisibleUserText(messages: UIMessage<ChatMessageMetadata>[]): string {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role !== 'user' || message.metadata?.hidden) continue;
+    const text = extractMessageText(message);
+    if (text) return text;
+  }
+
+  return '';
+}
 
 interface UseChatSessionsOptions {
   onLiveSpeech?: (text: string | null, agentId?: string | null) => void;
   onSpeechProgress?: (ratio: number | null) => void;
   onThinking?: (state: { stage: string; agentId?: string } | null) => void;
   onCueUser?: (fromAgentId?: string, prompt?: string) => void;
+  onWaitForUserTeaching?: (action: WaitForUserTeachingAction) => Promise<void> | void;
   onActiveBubble?: (messageId: string | null) => void;
   onLiveSessionError?: () => void;
   /** Called when a QA/Discussion session completes naturally (director end). */
@@ -52,6 +216,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const onSpeechProgressRef = useRef(options.onSpeechProgress);
   const onThinkingRef = useRef(options.onThinking);
   const onCueUserRef = useRef(options.onCueUser);
+  const onWaitForUserTeachingRef = useRef(options.onWaitForUserTeaching);
   const onActiveBubbleRef = useRef(options.onActiveBubble);
   const onLiveSessionErrorRef = useRef(options.onLiveSessionError);
   const onStopSessionRef = useRef(options.onStopSession);
@@ -62,6 +227,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     onSpeechProgressRef.current = options.onSpeechProgress;
     onThinkingRef.current = options.onThinking;
     onCueUserRef.current = options.onCueUser;
+    onWaitForUserTeachingRef.current = options.onWaitForUserTeaching;
     onActiveBubbleRef.current = options.onActiveBubble;
     onLiveSessionErrorRef.current = options.onLiveSessionError;
     onStopSessionRef.current = options.onStopSession;
@@ -72,6 +238,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     options.onSpeechProgress,
     options.onThinking,
     options.onCueUser,
+    options.onWaitForUserTeaching,
     options.onActiveBubble,
     options.onLiveSessionError,
     options.onStopSession,
@@ -310,7 +477,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             );
           },
 
-          onActionReady(messageId: string, data: ActionItem) {
+          async onActionReady(messageId: string, data: ActionItem) {
             // Add action badge to message parts
             const actionPart = {
               type: `action-${data.actionName}`,
@@ -336,13 +503,24 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
             // Execute the action via ActionEngine (fire-and-forget for visual effects)
             try {
-              const actionEngine = new ActionEngine(useStageStore);
+              const actionEngine = new ActionEngine(useStageStore, undefined, {
+                onWaitForUserTeaching: onWaitForUserTeachingRef.current,
+              });
+              const actionParams = { ...data.params };
+              const agentConfig = useAgentRegistry.getState().getAgent(data.agentId);
               const action = {
                 id: data.actionId,
                 type: data.actionName,
-                ...data.params,
-              } as Action;
-              actionEngine.execute(action);
+                ...actionParams,
+                params: actionParams,
+                agentId: data.agentId,
+                agentName: agentConfig?.name,
+              } as Action & {
+                params: Record<string, unknown>;
+                agentId: string;
+                agentName?: string;
+              };
+              await actionEngine.execute(action);
             } catch (err) {
               log.warn('[Buffer] Action execution error:', err);
             }
@@ -471,12 +649,18 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         requestTemplate.config.agentConfigs = generatedConfigs;
       }
 
-      const defaultMaxTurns = requestTemplate.config.agentIds.length <= 1 ? 1 : 10;
-      const maxTurns = settingsState.maxTurns
+      const isDebateFlow = requestTemplate.config.discussionMode === 'debate';
+      const defaultMaxTurns = isDebateFlow
+        ? 3
+        : requestTemplate.config.agentIds.length <= 1
+          ? 1
+          : 10;
+      const configuredMaxTurns = settingsState.maxTurns
         ? parseInt(settingsState.maxTurns, 10) || defaultMaxTurns
         : defaultMaxTurns;
+      const maxTurns = isDebateFlow ? Math.max(3, configuredMaxTurns) : configuredMaxTurns;
 
-      let directorState: DirectorState | undefined = undefined;
+      let directorState = sessionsRef.current.find((s) => s.id === sessionId)?.directorState;
       let turnCount = 0;
       let currentMessages = requestTemplate.messages;
       let consecutiveEmptyTurns = 0;
@@ -498,6 +682,61 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
         };
 
+        const studentWhiteboardActions = useCanvasStore.getState().studentWhiteboardActions;
+        const profile = useUserProfileStore.getState();
+        const studentName = profile.nickname || 'Student';
+        const userRecords: WhiteboardActionRecord[] = studentWhiteboardActions.map((action) => ({
+          actionName: action.actionName,
+          actorType: action.actorType ?? 'user',
+          userId: action.actorType === 'agent' ? action.userId : (action.userId ?? 'local-user'),
+          actorName:
+            action.actorType === 'agent' ? action.actorName : (action.actorName ?? studentName),
+          agentId: action.agentId,
+          agentName: action.agentName,
+          params: action.params,
+          timestamp: action.timestamp,
+          recordId: action.recordId,
+          clientId: action.clientId,
+          roomId: action.roomId,
+        }));
+        const seenLedgerKeys = new Set<string>();
+        const mergedLedger: WhiteboardLedgerRecord[] = [];
+        for (const record of [...(directorState?.whiteboardLedger ?? []), ...userRecords]) {
+          if (isWhiteboardLedgerSummary(record)) {
+            mergedLedger.push(record);
+            continue;
+          }
+
+          const keys = getWhiteboardActionDedupeKeys(record);
+          if (keys.some((key) => seenLedgerKeys.has(key))) {
+            continue;
+          }
+          keys.forEach((key) => seenLedgerKeys.add(key));
+          mergedLedger.push(record);
+        }
+        const summarizedLedger = await summarizeLedger(mergedLedger);
+        const shouldUpdateDirectorState =
+          userRecords.length > 0 ||
+          JSON.stringify(directorState?.whiteboardLedger ?? []) !==
+            JSON.stringify(summarizedLedger);
+
+        if (shouldUpdateDirectorState) {
+          directorState = {
+            turnCount: directorState?.turnCount ?? 0,
+            agentResponses: directorState?.agentResponses ?? [],
+            whiteboardLedger: summarizedLedger,
+            debateState: directorState?.debateState,
+          };
+          if (userRecords.length > 0) {
+            useCanvasStore.getState().clearStudentWhiteboardActions();
+          }
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === sessionId ? { ...s, directorState, updatedAt: Date.now() } : s,
+            ),
+          );
+        }
+
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -516,7 +755,20 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         }
 
         const buffer = createBufferForSession(sessionId, sessionType);
-        await processSSEStream(response, sessionId, buffer, controller.signal);
+        await processSSEStream(response, sessionId, buffer, controller.signal, {
+          onError(error) {
+            toast.error('生成中断', {
+              description: error.message || '请刷新或稍后重试。',
+            });
+          },
+          onFinally() {
+            // 防线：无论 SSE 是否正常收到 done，都清空 Planning/Thinking。
+            // buffer 收到 done 时也会清理，这里是网络断开、500、解析异常的兜底。
+            onThinkingRef.current?.(null);
+            onSpeechProgressRef.current?.(null);
+            setIsStreaming(false);
+          },
+        });
 
         // Wait for buffer to finish playing all items (character animations, delays)
         try {
@@ -540,8 +792,20 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         if (!doneData) break; // No done event — something went wrong
 
         // Update accumulated director state
-        directorState = doneData.directorState;
+        directorState = doneData.directorState
+          ? {
+              ...doneData.directorState,
+              whiteboardLedger: await summarizeLedger(doneData.directorState.whiteboardLedger),
+            }
+          : undefined;
         turnCount = directorState?.turnCount ?? turnCount + 1;
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === sessionId && directorState
+              ? { ...s, directorState, updatedAt: Date.now() }
+              : s,
+          ),
+        );
 
         // Check outcome
         if (doneData.cueUserReceived) {
@@ -579,6 +843,30 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       if (!controller.signal.aborted) {
         const wasCueUser = doneData?.cueUserReceived ?? false;
         if (!wasCueUser) {
+          const completedSession = sessionsRef.current.find((s) => s.id === sessionId);
+          const isCompletedDebate =
+            completedSession?.config.discussionMode === 'debate' ||
+            requestTemplate.config.discussionMode === 'debate';
+          if (isCompletedDebate) {
+            const judgmentText = getLatestVisibleUserText(
+              completedSession?.messages ?? currentMessages,
+            );
+            if (judgmentText) {
+              const templateDebateTopic =
+                typeof requestTemplate.config.discussionTopic === 'string'
+                  ? requestTemplate.config.discussionTopic
+                  : undefined;
+              void recordDebateJudgmentEvidence({
+                stage: useStageStore.getState().stage,
+                sessionId,
+                debateTopic: completedSession?.config.discussionTopic || templateDebateTopic,
+                judgmentText,
+              }).catch((error) => {
+                log.warn('[LearningProfile] Failed to record debate judgment evidence:', error);
+              });
+            }
+          }
+
           // Session completed normally (END or maxTurns reached)
           setSessions((prev) =>
             prev.map((s) =>
@@ -866,6 +1154,14 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             config: {
               agentIds,
               sessionType: session.type,
+              autoEndPolicy: session.config.autoEndPolicy,
+              discussionTopic:
+                session.config.discussionTopic ||
+                (session.type === 'discussion' ? session.title : undefined),
+              discussionPrompt: session.config.discussionPrompt,
+              studentQuestion: session.config.studentQuestion,
+              discussionMode: session.config.discussionMode,
+              debateConfig: session.config.debateConfig,
             },
             userProfile: {
               nickname: userProfileState.nickname || undefined,
@@ -917,8 +1213,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
    * Send a message to the active session
    */
   const sendMessage = useCallback(
-    async (content: string): Promise<void> => {
+    async (content: string, options: SendMessageOptions = {}): Promise<void> => {
       let sessionId = activeSessionId;
+      const hidden = options.hidden === true;
 
       // Interrupt active generation: abort stream and append "..." to the last agent message
       if (isStreaming && abortControllerRef.current) {
@@ -1002,12 +1299,13 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       const userMessage: UIMessage<ChatMessageMetadata> = {
         id: userMessageId,
         role: 'user',
-        parts: [{ type: 'text', text: content }],
+        parts: buildUserMessageParts(content, options.attachments),
         metadata: {
-          senderName: t('common.you'),
-          senderAvatar: USER_AVATAR,
+          senderName: hidden ? undefined : t('common.you'),
+          senderAvatar: hidden ? undefined : USER_AVATAR,
           originalRole: 'user',
           createdAt: now,
+          hidden: hidden || undefined,
         },
       };
 
@@ -1017,6 +1315,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         ? [...existingSession.messages, userMessage]
         : [userMessage];
       const sessionType: SessionType = existingSession?.type || 'qa';
+      const existingConfig = existingSession?.config;
 
       // Pure updater — no side effects
       setSessions((prev) => {
@@ -1058,7 +1357,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       try {
         log.info(
-          `[ChatArea] Sending message: "${content.slice(0, 50)}..." agents: ${agentIds.join(', ')}`,
+          `[ChatArea] Sending message: "${hidden ? '[hidden-user-message]' : content.slice(0, 50)}..." agents: ${agentIds.join(', ')}`,
         );
 
         const userProfileState = useUserProfileStore.getState();
@@ -1078,6 +1377,14 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             config: {
               agentIds,
               sessionType,
+              autoEndPolicy: existingConfig?.autoEndPolicy,
+              discussionTopic:
+                existingConfig?.discussionTopic ||
+                (sessionType === 'discussion' ? existingSession?.title : undefined),
+              discussionPrompt: existingConfig?.discussionPrompt,
+              studentQuestion: existingConfig?.studentQuestion,
+              discussionMode: existingConfig?.discussionMode,
+              debateConfig: existingConfig?.debateConfig,
             },
             userProfile: {
               nickname: userProfileState.nickname || undefined,
@@ -1134,16 +1441,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       // but being explicit guards against future refactors)
       livePausedRef.current = false;
 
-      // Validate model configuration before starting discussion
-      const modelConfig = getCurrentModelConfig();
-      if (!modelConfig.modelId) {
+      const modelSelection = resolveChatModelConfig();
+      if (!modelSelection) {
         toast.error(t('settings.modelNotConfigured'));
-        return;
-      }
-      if (modelConfig.requiresApiKey && !modelConfig.apiKey && !modelConfig.isServerConfigured) {
-        toast.error(t('settings.setupNeeded'), {
-          description: t('settings.apiKeyDesc'),
-        });
         return;
       }
 
@@ -1157,7 +1457,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const now = Date.now();
-      const agentId = request.agentId || 'default-1';
+      const agentId =
+        request.agentId ||
+        (request.discussionMode === 'debate' ? request.debateConfig?.agentAId : undefined) ||
+        'default-1';
 
       // Read all selected agent IDs from settings store
       const settingsState = useSettingsStore.getState();
@@ -1168,6 +1471,16 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       // Ensure the trigger agent is included
       if (!agentIds.includes(agentId)) {
         agentIds.unshift(agentId);
+      }
+      if (request.discussionMode === 'debate' && request.debateConfig) {
+        for (const debateAgentId of [
+          request.debateConfig.agentAId,
+          request.debateConfig.agentBId,
+        ]) {
+          if (!agentIds.includes(debateAgentId)) {
+            agentIds.push(debateAgentId);
+          }
+        }
       }
 
       // No pre-created assistant message — agent_start events create them dynamically
@@ -1182,6 +1495,12 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           maxTurns: 0, // Not used for runtime — frontend loop manages maxTurns
           currentTurn: 0,
           triggerAgentId: agentId,
+          autoEndPolicy: request.autoEndPolicy,
+          discussionTopic: request.topic,
+          discussionPrompt: request.prompt,
+          studentQuestion: request.studentQuestion,
+          discussionMode: request.discussionMode,
+          debateConfig: request.debateConfig,
         },
         toolCalls: [],
         pendingToolCalls: [],
@@ -1202,7 +1521,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       try {
         const userProfileState = useUserProfileStore.getState();
-        const mc = getCurrentModelConfig();
+        const mc = modelSelection.config;
 
         await runAgentLoop(
           sessionId,
@@ -1221,6 +1540,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               discussionTopic: request.topic,
               discussionPrompt: request.prompt,
               triggerAgentId: agentId,
+              autoEndPolicy: request.autoEndPolicy,
+              studentQuestion: request.studentQuestion,
+              discussionMode: request.discussionMode,
+              debateConfig: request.debateConfig,
             },
             userProfile: {
               nickname: userProfileState.nickname || undefined,

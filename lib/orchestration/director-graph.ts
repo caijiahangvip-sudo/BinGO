@@ -23,8 +23,13 @@ import type { LangGraphRunnableConfig } from '@langchain/langgraph';
 import type { LanguageModel } from 'ai';
 
 import { AISdkLangGraphAdapter } from './ai-sdk-adapter';
-import type { StatelessEvent } from '@/lib/types/chat';
-import type { StatelessChatRequest } from '@/lib/types/chat';
+import type {
+  DebateConfig,
+  DebateState,
+  DiscussionMode,
+  StatelessEvent,
+  StatelessChatRequest,
+} from '@/lib/types/chat';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
@@ -33,13 +38,58 @@ import {
   summarizeConversation,
   convertMessagesToOpenAI,
 } from './prompt-builder';
-import { buildDirectorPrompt, parseDirectorDecision } from './director-prompt';
+import {
+  buildDirectorPrompt,
+  DEFAULT_VISUAL_CLARIFICATION_MESSAGE,
+  REQUEST_CLARIFICATION_ACTION_NAME,
+  isWhiteboardLedgerSummary,
+  parseDirectorDecision,
+} from './director-prompt';
 import { getEffectiveActions } from './tool-schemas';
-import type { AgentTurnSummary, WhiteboardActionRecord } from './director-prompt';
+import type {
+  AgentTurnSummary,
+  WhiteboardActionRecord,
+  WhiteboardLedgerRecord,
+} from './director-prompt';
 import { parseStructuredChunk, createParserState, finalizeParser } from './stateless-generate';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('DirectorGraph');
+const DEFAULT_MAX_GRAPH_ITERATIONS = 5;
+
+function writeGraphError(config: LangGraphRunnableConfig, message: string): void {
+  const rawWrite = config.writer as ((chunk: StatelessEvent) => void) | undefined;
+  if (!rawWrite) return;
+  try {
+    rawWrite({ type: 'error', data: { message } });
+  } catch {
+    /* controller closed after abort */
+  }
+}
+
+function shouldStopForGraphIterationLimit(
+  state: OrchestratorStateType,
+  config: LangGraphRunnableConfig,
+  nodeName: string,
+): boolean {
+  if (state.graphIterations < state.maxGraphIterations) return false;
+
+  const message = `Director graph exceeded maxIterations=${state.maxGraphIterations} at node "${nodeName}". Generation was stopped to prevent an infinite graph loop.`;
+  log.error(message);
+  writeGraphError(config, message);
+  return true;
+}
+
+function getClarificationMessage(params: Record<string, unknown>): string {
+  const message = params.message;
+  return typeof message === 'string' && message.trim()
+    ? message.trim()
+    : DEFAULT_VISUAL_CLARIFICATION_MESSAGE;
+}
+
+function isRequestClarificationAction(actionName: string): boolean {
+  return actionName === REQUEST_CLARIFICATION_ACTION_NAME;
+}
 
 // ==================== State Definition ====================
 
@@ -54,11 +104,25 @@ const OrchestratorState = Annotation.Root({
   maxTurns: Annotation<number>,
   languageModel: Annotation<LanguageModel>,
   thinkingConfig: Annotation<ThinkingConfig | null>,
-  discussionContext: Annotation<{ topic: string; prompt?: string } | null>,
+  discussionContext: Annotation<{
+    topic: string;
+    prompt?: string;
+    autoEndPolicy?: 'quiz_pass';
+    studentQuestion?: string;
+  } | null>,
+  discussionMode: Annotation<DiscussionMode>,
+  debateConfig: Annotation<DebateConfig | null>,
+  debateState: Annotation<DebateState | null>,
   triggerAgentId: Annotation<string | null>,
   userProfile: Annotation<{ nickname?: string; bio?: string } | null>,
+  dictionaryContext: Annotation<string | null>,
+  longTermMemoryContext: Annotation<string | null>,
   /** Request-scoped agent configs for generated agents (not in the default registry) */
   agentConfigOverrides: Annotation<Record<string, AgentConfig>>,
+  /** Request-scoped graph safety fuse. Incremented by every graph node. */
+  graphIterations: Annotation<number>,
+  /** Hard limit for graph node transitions in a single SSE request. */
+  maxGraphIterations: Annotation<number>,
 
   // Mutable (updated by nodes)
   currentAgentId: Annotation<string | null>,
@@ -67,7 +131,7 @@ const OrchestratorState = Annotation.Root({
     reducer: (prev, update) => [...prev, ...update],
     default: () => [],
   }),
-  whiteboardLedger: Annotation<WhiteboardActionRecord[]>({
+  whiteboardLedger: Annotation<WhiteboardLedgerRecord[]>({
     reducer: (prev, update) => [...prev, ...update],
     default: () => [],
   }),
@@ -83,6 +147,56 @@ type OrchestratorStateType = typeof OrchestratorState.State;
  */
 function resolveAgent(state: OrchestratorStateType, agentId: string): AgentConfig | undefined {
   return state.agentConfigOverrides[agentId] ?? useAgentRegistry.getState().getAgent(agentId);
+}
+
+function getInitialDebateState(config: DebateConfig, topic?: string): DebateState {
+  return {
+    phase: 'agent_a',
+    agentAId: config.agentAId,
+    agentBId: config.agentBId,
+    topic: config.topic || topic,
+  };
+}
+
+function buildSocraticConstructivistPrompt(ledger: WhiteboardLedgerRecord[]): string {
+  const userTraceCount = ledger.filter(
+    (record) => !isWhiteboardLedgerSummary(record) && record.actorType === 'user',
+  ).length;
+
+  return `# Socratic Constructivist Constraint (CRITICAL)
+- You MUST deeply inspect the whiteboard Ledger in the context, especially user actions.
+- User whiteboard trace count in this request context: ${userTraceCount}.
+- If the student has drawn, written, cleared, or connected anything on the whiteboard, you MUST ask a targeted follow-up about those exact traces.
+- Do NOT give the final answer directly. Guide the student to derive it with hints, contrastive questions, and requests to justify their next step.
+- If the student's trace is incomplete or incorrect, name the observed part and ask what should change, instead of replacing their reasoning with your own solution.`;
+}
+
+function buildDebateAgentPrompt(state: OrchestratorStateType, agentId: string): string {
+  if (state.discussionMode !== 'debate' || !state.debateConfig || !state.debateState) {
+    return '';
+  }
+
+  const isAgentA = agentId === state.debateState.agentAId;
+  const isAgentB = agentId === state.debateState.agentBId;
+  if (!isAgentA && !isAgentB) return '';
+
+  const side = isAgentA ? 'Agent A' : 'Agent B';
+  const half = isAgentA ? 'left half' : 'right half';
+  const xRange = isAgentA ? 'x between 60 and 430' : 'x between 560 and 920';
+  const persona =
+    (isAgentA ? state.debateConfig.agentAPersona : state.debateConfig.agentBPersona) ||
+    (isAgentA
+      ? 'argue the affirmative/pro side with clear evidence'
+      : 'argue the opposing/con side with clear counter-evidence');
+
+  return `# Debate_Flow Constraint (CRITICAL)
+You are ${side} in a forced two-agent debate on "${state.debateState.topic || state.discussionContext?.topic || 'the current topic'}".
+Persona for this turn: ${persona}.
+- Present the opposite side from the other debate agent. Do not hedge into a neutral summary.
+- You MUST use wb_draw_text to write your core claim and 1-2 supporting points on the whiteboard ${half}.
+- Place all debate text with ${xRange}; y should be between 80 and 460. Do not write in the other half.
+- Keep speech concise and invite the student to judge the stronger argument.
+- Your visible whiteboard note should be short enough to fit on one side.`;
 }
 
 // ==================== Director Node ====================
@@ -103,6 +217,14 @@ async function directorNode(
   state: OrchestratorStateType,
   config: LangGraphRunnableConfig,
 ): Promise<Partial<OrchestratorStateType>> {
+  if (shouldStopForGraphIterationLimit(state, config, 'director')) {
+    return {
+      shouldEnd: true,
+      graphIterations: state.graphIterations,
+    };
+  }
+
+  const nextGraphIterations = state.graphIterations + 1;
   const rawWrite = config.writer as (chunk: StatelessEvent) => void;
   const write = (chunk: StatelessEvent) => {
     try {
@@ -113,10 +235,59 @@ async function directorNode(
   };
   const isSingleAgent = state.availableAgentIds.length <= 1;
 
+  // ── Debate_Flow: deterministic A -> B -> USER routing across stateless requests ──
+  if (state.discussionMode === 'debate' && state.debateConfig) {
+    const debateState =
+      state.debateState ??
+      getInitialDebateState(state.debateConfig, state.discussionContext?.topic);
+
+    if (state.turnCount >= state.maxTurns) {
+      log.info(`[Director][Debate_Flow] Request turn limit reached; returning to client`);
+      return { shouldEnd: true, debateState, graphIterations: nextGraphIterations };
+    }
+
+    if (debateState.phase === 'agent_a' || debateState.phase === 'agent_b') {
+      const nextAgentId =
+        debateState.phase === 'agent_a' ? debateState.agentAId : debateState.agentBId;
+      if (!state.availableAgentIds.includes(nextAgentId)) {
+        log.warn(`[Director][Debate_Flow] Agent "${nextAgentId}" is not available, ending`);
+        return { shouldEnd: true, debateState, graphIterations: nextGraphIterations };
+      }
+
+      log.info(`[Director][Debate_Flow] Dispatching ${debateState.phase}: "${nextAgentId}"`);
+      write({
+        type: 'thinking',
+        data: { stage: 'agent_loading', agentId: nextAgentId },
+      });
+      return {
+        currentAgentId: nextAgentId,
+        shouldEnd: false,
+        debateState,
+        graphIterations: nextGraphIterations,
+      };
+    }
+
+    if (debateState.phase === 'user') {
+      const prompt = `请比较白板左半区和右半区的两种观点，说出你更支持哪一边，并说明理由。`;
+      log.info('[Director][Debate_Flow] Cueing USER after both debate agents');
+      write({
+        type: 'cue_user',
+        data: { fromAgentId: debateState.agentBId, prompt },
+      });
+      return {
+        shouldEnd: true,
+        debateState: { ...debateState, phase: 'done' },
+        graphIterations: nextGraphIterations,
+      };
+    }
+
+    return { shouldEnd: true, debateState, graphIterations: nextGraphIterations };
+  }
+
   // ── Turn limit check (applies to both single & multi) ──
   if (state.turnCount >= state.maxTurns) {
     log.info(`[Director] Turn limit reached (${state.turnCount}/${state.maxTurns}), ending`);
-    return { shouldEnd: true };
+    return { shouldEnd: true, graphIterations: nextGraphIterations };
   }
 
   // ── Single agent: code-only director ──
@@ -127,13 +298,13 @@ async function directorNode(
       // First turn: dispatch the agent
       log.info(`[Director] Single agent: dispatching "${agentId}"`);
       write({ type: 'thinking', data: { stage: 'agent_loading', agentId } });
-      return { currentAgentId: agentId, shouldEnd: false };
+      return { currentAgentId: agentId, shouldEnd: false, graphIterations: nextGraphIterations };
     }
 
     // Agent already responded: cue user for follow-up
     log.info(`[Director] Single agent: cueing user after "${agentId}"`);
     write({ type: 'cue_user', data: { fromAgentId: agentId } });
-    return { shouldEnd: true };
+    return { shouldEnd: true, graphIterations: nextGraphIterations };
   }
 
   // ── Multi agent: fast-path for first turn with trigger ──
@@ -145,7 +316,11 @@ async function directorNode(
         type: 'thinking',
         data: { stage: 'agent_loading', agentId: triggerId },
       });
-      return { currentAgentId: triggerId, shouldEnd: false };
+      return {
+        currentAgentId: triggerId,
+        shouldEnd: false,
+        graphIterations: nextGraphIterations,
+      };
     }
     log.warn(
       `[Director] Trigger agent "${triggerId}" not in available agents, falling through to LLM`,
@@ -158,7 +333,7 @@ async function directorNode(
     .filter((a): a is AgentConfig => a != null);
 
   if (agents.length === 0) {
-    return { shouldEnd: true };
+    return { shouldEnd: true, graphIterations: nextGraphIterations };
   }
 
   write({ type: 'thinking', data: { stage: 'director' } });
@@ -193,7 +368,7 @@ async function directorNode(
 
     if (decision.shouldEnd || !decision.nextAgentId) {
       log.info('[Director] Decision: END');
-      return { shouldEnd: true };
+      return { shouldEnd: true, graphIterations: nextGraphIterations };
     }
 
     if (decision.nextAgentId === 'USER') {
@@ -202,13 +377,13 @@ async function directorNode(
         type: 'cue_user',
         data: { fromAgentId: state.currentAgentId || undefined },
       });
-      return { shouldEnd: true };
+      return { shouldEnd: true, graphIterations: nextGraphIterations };
     }
 
     const agentExists = agents.some((a) => a.id === decision.nextAgentId);
     if (!agentExists) {
       log.warn(`[Director] Unknown agent "${decision.nextAgentId}", ending`);
-      return { shouldEnd: true };
+      return { shouldEnd: true, graphIterations: nextGraphIterations };
     }
 
     write({
@@ -220,10 +395,11 @@ async function directorNode(
     return {
       currentAgentId: decision.nextAgentId,
       shouldEnd: false,
+      graphIterations: nextGraphIterations,
     };
   } catch (error) {
     log.error('[Director] Error:', error);
-    return { shouldEnd: true };
+    return { shouldEnd: true, graphIterations: nextGraphIterations };
   }
 }
 
@@ -289,11 +465,22 @@ async function runAgentGeneration(
     state.userProfile || undefined,
     state.agentResponses,
   );
+  const effectiveSystemPrompt = [
+    systemPrompt,
+    state.dictionaryContext ? `# Chinese Dictionary References\n${state.dictionaryContext}` : '',
+    state.longTermMemoryContext
+      ? `# Long-Term Student Learning Memory (RAG)\n${state.longTermMemoryContext}`
+      : '',
+    buildSocraticConstructivistPrompt(state.whiteboardLedger),
+    buildDebateAgentPrompt(state, agentId),
+  ]
+    .filter(Boolean)
+    .join('\n\n');
   const openaiMessages = convertMessagesToOpenAI(state.messages, agentId);
   const adapter = new AISdkLangGraphAdapter(state.languageModel, state.thinkingConfig ?? undefined);
 
   const lcMessages = [
-    new SystemMessage(systemPrompt),
+    new SystemMessage(effectiveSystemPrompt),
     ...openaiMessages.map((m) =>
       m.role === 'user' ? new HumanMessage(m.content) : new AIMessage(m.content),
     ),
@@ -313,12 +500,15 @@ async function runAgentGeneration(
   const parserState = createParserState();
   let fullText = '';
   let actionCount = 0;
+  let clarificationRequested = false;
   const whiteboardActions: WhiteboardActionRecord[] = [];
 
   try {
     for await (const chunk of adapter.streamGenerate(lcMessages, {
       signal: config.signal,
     })) {
+      if (clarificationRequested) break;
+
       if (chunk.type === 'delta') {
         const parseResult = parseStructuredChunk(chunk.content, parserState);
 
@@ -331,6 +521,41 @@ async function runAgentGeneration(
             `[AgentGenerate] Parse: ordered=${parseResult.ordered.length} (${parseResult.ordered.map((e) => e.type).join(',')}), textChunks=${parseResult.textChunks.length}, actions=${parseResult.actions.length}, done=${parseResult.isDone}`,
           );
         }
+
+        const clarificationEntry = parseResult.ordered.find((entry) => {
+          if (entry.type !== 'action') return false;
+          const action = parseResult.actions[entry.index];
+          return action ? isRequestClarificationAction(action.actionName) : false;
+        });
+
+        if (clarificationEntry?.type === 'action') {
+          const ac = parseResult.actions[clarificationEntry.index];
+          if (ac && effectiveActions.includes(ac.actionName)) {
+            const clarificationMessage = getClarificationMessage(ac.params);
+            actionCount++;
+            fullText += clarificationMessage;
+            write({
+              type: 'text_delta',
+              data: { content: clarificationMessage, messageId },
+            });
+            write({
+              type: 'action',
+              data: {
+                actionId: ac.actionId,
+                actionName: ac.actionName,
+                params: ac.params,
+                agentId,
+                messageId,
+              },
+            });
+            clarificationRequested = true;
+            log.warn(
+              `[VisionFallback] Agent ${agentConfig.name} requested clarification instead of evaluating low-confidence whiteboard vision.`,
+            );
+            break;
+          }
+        }
+
         for (const entry of parseResult.ordered) {
           if (entry.type === 'text') {
             const rawText = parseResult.textChunks[entry.index];
@@ -358,10 +583,12 @@ async function runAgentGeneration(
               continue;
             }
             actionCount++;
+
             // Record whiteboard actions to the ledger
             if (ac.actionName.startsWith('wb_')) {
               whiteboardActions.push({
                 actionName: ac.actionName as WhiteboardActionRecord['actionName'],
+                actorType: 'agent',
                 agentId,
                 agentName: agentConfig.name,
                 params: ac.params,
@@ -380,6 +607,8 @@ async function runAgentGeneration(
           }
         }
 
+        if (clarificationRequested) break;
+
         // Emit trailing partial text deltas not covered by ordered
         for (let i = emittedTextCount; i < parseResult.textChunks.length; i++) {
           const rawText = parseResult.textChunks[i];
@@ -396,18 +625,20 @@ async function runAgentGeneration(
     }
 
     // Finalize: emit any remaining content if the model didn't produce valid JSON
-    const finalResult = finalizeParser(parserState);
-    for (const entry of finalResult.ordered) {
-      if (entry.type === 'text') {
-        const rawText = finalResult.textChunks[entry.index];
-        if (!rawText) continue;
-        const text = rawText.replace(/^>+\s?/gm, '');
-        if (!text) continue;
-        fullText += text;
-        write({
-          type: 'text_delta',
-          data: { content: text, messageId },
-        });
+    if (!clarificationRequested) {
+      const finalResult = finalizeParser(parserState);
+      for (const entry of finalResult.ordered) {
+        if (entry.type === 'text') {
+          const rawText = finalResult.textChunks[entry.index];
+          if (!rawText) continue;
+          const text = rawText.replace(/^>+\s?/gm, '');
+          if (!text) continue;
+          fullText += text;
+          write({
+            type: 'text_delta',
+            data: { content: text, messageId },
+          });
+        }
       }
     }
   } catch (error) {
@@ -440,9 +671,18 @@ async function agentGenerateNode(
   state: OrchestratorStateType,
   config: LangGraphRunnableConfig,
 ): Promise<Partial<OrchestratorStateType>> {
+  if (shouldStopForGraphIterationLimit(state, config, 'agent_generate')) {
+    return {
+      shouldEnd: true,
+      currentAgentId: null,
+      graphIterations: state.graphIterations,
+    };
+  }
+
+  const nextGraphIterations = state.graphIterations + 1;
   const agentId = state.currentAgentId;
   if (!agentId) {
-    return { shouldEnd: true };
+    return { shouldEnd: true, graphIterations: nextGraphIterations };
   }
 
   const agentConfig = resolveAgent(state, agentId);
@@ -468,6 +708,7 @@ async function agentGenerateNode(
     ],
     whiteboardLedger: result.whiteboardActions,
     currentAgentId: null,
+    graphIterations: nextGraphIterations,
   };
 }
 
@@ -522,11 +763,20 @@ export function buildInitialState(
     ? {
         topic: request.config.discussionTopic,
         prompt: request.config.discussionPrompt,
+        autoEndPolicy: request.config.autoEndPolicy,
+        studentQuestion: request.config.studentQuestion,
       }
     : null;
 
   const incoming = request.directorState;
   const turnCount = incoming?.turnCount ?? 0;
+  const debateConfig = request.config.debateConfig ?? null;
+  const discussionMode = request.config.discussionMode ?? 'standard';
+  const debateState =
+    incoming?.debateState ??
+    (discussionMode === 'debate' && debateConfig
+      ? getInitialDebateState(debateConfig, discussionContext?.topic)
+      : null);
 
   return {
     messages: request.messages,
@@ -536,9 +786,16 @@ export function buildInitialState(
     languageModel,
     thinkingConfig: thinkingConfig ?? null,
     discussionContext,
+    discussionMode,
+    debateConfig,
+    debateState,
     triggerAgentId: request.config.triggerAgentId || null,
     userProfile: request.userProfile || null,
+    dictionaryContext: request.dictionaryContext || null,
+    longTermMemoryContext: request.longTermMemoryContext || null,
     agentConfigOverrides,
+    graphIterations: 0,
+    maxGraphIterations: DEFAULT_MAX_GRAPH_ITERATIONS,
     currentAgentId: null,
     turnCount,
     agentResponses: incoming?.agentResponses ?? [],

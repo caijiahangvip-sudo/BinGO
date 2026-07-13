@@ -1,7 +1,9 @@
 'use client';
 
-import { useRef, useState, useLayoutEffect } from 'react';
+import { useMemo, useRef, useState, useLayoutEffect } from 'react';
+import katex from 'katex';
 import type { PPTLatexElement } from '@/lib/types/slides';
+import { repairMathDisplayText, repairMathLatex } from '@/lib/utils/math-display-repair';
 
 export { BaseLatexElement } from './BaseLatexElement';
 
@@ -15,6 +17,11 @@ export interface LatexElementProps {
  * Renders KaTeX HTML if available, falls back to legacy SVG path.
  */
 export function LatexElement({ elementInfo, selectElement }: LatexElementProps) {
+  const html = useMemo(
+    () => getRenderedLatexHtml(elementInfo.latex, elementInfo.html),
+    [elementInfo.html, elementInfo.latex],
+  );
+
   const handleSelectElement = (e: React.MouseEvent | React.TouchEvent) => {
     if (elementInfo.lock) return;
     e.stopPropagation();
@@ -42,9 +49,9 @@ export function LatexElement({ elementInfo, selectElement }: LatexElementProps) 
           onMouseDown={handleSelectElement}
           onTouchStart={handleSelectElement}
         >
-          {elementInfo.html ? (
+          {html ? (
             <KatexContent
-              html={elementInfo.html}
+              html={html}
               width={elementInfo.width}
               height={elementInfo.height}
             />
@@ -73,6 +80,27 @@ export function LatexElement({ elementInfo, selectElement }: LatexElementProps) 
       </div>
     </div>
   );
+}
+
+function getRenderedLatexHtml(latex: string, fallbackHtml?: string): string | undefined {
+  const repairedLatex = repairMathLatex(latex);
+  if (fallbackHtml && repairedLatex === latex) {
+    return repairMathDisplayText(fallbackHtml);
+  }
+
+  if (!repairedLatex) {
+    return fallbackHtml ? repairMathDisplayText(fallbackHtml) : undefined;
+  }
+
+  try {
+    return katex.renderToString(repairedLatex, {
+      throwOnError: false,
+      displayMode: true,
+      output: 'html',
+    });
+  } catch {
+    return fallbackHtml ? repairMathDisplayText(fallbackHtml) : undefined;
+  }
 }
 
 function KatexContent({ html, width, height }: { html: string; width: number; height: number }) {

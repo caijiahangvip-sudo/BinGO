@@ -5,5 +5,7 @@ Question Count: {{questionCount}}, Difficulty: {{difficulty}}, Question Types: {
 
 **Language Requirement**: Questions and options must be in the same language as the title and description above.
 
+If a question says it uses a figure or diagram, include the supported `diagram` object in that question. Otherwise rewrite the question so it can be answered from text alone.
+
 Output JSON array directly (no explanation, no code blocks, no LaTeX):
 [{"id":"q1","type":"single","question":"Question text","options":["Option A","Option B","Option C","Option D"],"correctAnswer":"Option A"}]

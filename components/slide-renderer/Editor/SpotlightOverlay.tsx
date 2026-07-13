@@ -4,15 +4,14 @@ import { useRef, useState, useLayoutEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSceneSelector } from '@/lib/contexts/scene-context';
 import { useCanvasStore } from '@/lib/store/canvas';
+import {
+  buildSpotlightOverlayPath,
+  normalizeSpotlightDimness,
+  normalizeSpotlightRect,
+  type SpotlightRect,
+} from '@/lib/playback/spotlight-utils';
 import type { SlideContent } from '@/lib/types/stage';
 import type { PPTElement } from '@/lib/types/slides';
-
-interface SpotlightRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
 
 /**
  * Spotlight overlay component
@@ -23,6 +22,8 @@ interface SpotlightRect {
 export function SpotlightOverlay() {
   const spotlightElementId = useCanvasStore.use.spotlightElementId();
   const spotlightOptions = useCanvasStore.use.spotlightOptions();
+  const spotlightMode = useCanvasStore.use.spotlightMode();
+  const spotlightPercentageGeometry = useCanvasStore.use.spotlightPercentageGeometry();
   const containerRef = useRef<HTMLDivElement>(null);
   const [rect, setRect] = useState<SpotlightRect | null>(null);
 
@@ -30,16 +31,45 @@ export function SpotlightOverlay() {
     (content) => content.canvas.elements,
   );
 
+  const updateRect = useCallback((nextRect: SpotlightRect | null) => {
+    setRect((prevRect) => {
+      if (
+        prevRect === nextRect ||
+        (prevRect &&
+          nextRect &&
+          prevRect.x === nextRect.x &&
+          prevRect.y === nextRect.y &&
+          prevRect.w === nextRect.w &&
+          prevRect.h === nextRect.h)
+      ) {
+        return prevRect;
+      }
+      return nextRect;
+    });
+  }, []);
+
   // Compute target element position in SVG coordinate system via DOM measurement
   const measure = useCallback(() => {
+    if (spotlightMode === 'percentage' && spotlightPercentageGeometry) {
+      updateRect(
+        normalizeSpotlightRect({
+          x: spotlightPercentageGeometry.x,
+          y: spotlightPercentageGeometry.y,
+          w: spotlightPercentageGeometry.w,
+          h: spotlightPercentageGeometry.h,
+        }),
+      );
+      return;
+    }
+
     if (!spotlightElementId || !containerRef.current) {
-      setRect(null);
+      updateRect(null);
       return;
     }
 
     const domElement = document.getElementById(`screen-element-${spotlightElementId}`);
     if (!domElement) {
-      setRect(null);
+      updateRect(null);
       return;
     }
 
@@ -51,26 +81,55 @@ export function SpotlightOverlay() {
     const targetRect = targetEl.getBoundingClientRect();
 
     if (containerRect.width === 0 || containerRect.height === 0) {
-      setRect(null);
+      updateRect(null);
       return;
     }
 
     // Convert to SVG viewBox 0-100 coordinates
-    setRect({
-      x: ((targetRect.left - containerRect.left) / containerRect.width) * 100,
-      y: ((targetRect.top - containerRect.top) / containerRect.height) * 100,
-      w: (targetRect.width / containerRect.width) * 100,
-      h: (targetRect.height / containerRect.height) * 100,
-    });
-  }, [spotlightElementId]);
+    updateRect(
+      normalizeSpotlightRect({
+        x: ((targetRect.left - containerRect.left) / containerRect.width) * 100,
+        y: ((targetRect.top - containerRect.top) / containerRect.height) * 100,
+        w: (targetRect.width / containerRect.width) * 100,
+        h: (targetRect.height / containerRect.height) * 100,
+      }),
+    );
+  }, [spotlightElementId, spotlightMode, spotlightPercentageGeometry, updateRect]);
 
   useLayoutEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- DOM measurement requires effect
     measure();
   }, [measure, elements]);
 
+  useLayoutEffect(() => {
+    if (!spotlightElementId || !containerRef.current) return;
+
+    const targetElement = document.getElementById(`screen-element-${spotlightElementId}`);
+    const contentElement = targetElement?.querySelector('.element-content');
+    const observedElements = [containerRef.current, targetElement, contentElement].filter(
+      (el): el is Element => !!el,
+    );
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+
+    const observer = new ResizeObserver(() => {
+      measure();
+    });
+    observedElements.forEach((el) => observer.observe(el));
+    window.addEventListener('resize', measure);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [measure, spotlightElementId]);
+
   const active = !!spotlightElementId && !!spotlightOptions && !!rect;
-  const dimness = spotlightOptions?.dimness ?? 0.7;
+  const dimness = normalizeSpotlightDimness(spotlightOptions?.dimness);
+  const overlayPath = rect ? buildSpotlightOverlayPath(rect) : '';
 
   return (
     <div
@@ -93,71 +152,23 @@ export function SpotlightOverlay() {
               preserveAspectRatio="none"
               className="absolute inset-0"
             >
-              <defs>
-                <mask id={`mask-${spotlightElementId}`}>
-                  {/* White background = show mask layer (dimmed) */}
-                  <rect x="0" y="0" width="100" height="100" fill="white" />
-                  {/* Black rectangle = hide mask layer (highlighted area / cutout) */}
-                  <motion.rect
-                    fill="black"
-                    initial={{
-                      x: rect.x - 8,
-                      y: rect.y - 8,
-                      width: rect.w + 16,
-                      height: rect.h + 16,
-                      rx: 4,
-                    }}
-                    animate={{
-                      x: rect.x - 0.4,
-                      y: rect.y - 0.6,
-                      width: rect.w + 0.8,
-                      height: rect.h + 1.2,
-                      rx: 1,
-                    }}
-                    transition={{
-                      duration: 0.6,
-                      ease: [0.16, 1, 0.3, 1],
-                    }}
-                  />
-                </mask>
-              </defs>
-
-              {/* Dimmed Background */}
-              <rect
-                width="100"
-                height="100"
+              <path
+                d={overlayPath}
                 fill={`rgba(0,0,0,${dimness})`}
-                mask={`url(#mask-${spotlightElementId})`}
-                className="backdrop-blur-[1.5px]"
+                fillRule="evenodd"
+                clipRule="evenodd"
               />
 
-              {/* THE ONE BORDER - white border */}
-              <motion.rect
-                initial={{
-                  x: rect.x - 4,
-                  y: rect.y - 4,
-                  width: rect.w + 8,
-                  height: rect.h + 8,
-                  opacity: 0,
-                  rx: 2,
-                }}
-                animate={{
-                  x: rect.x - 0.4,
-                  y: rect.y - 0.6,
-                  width: rect.w + 0.8,
-                  height: rect.h + 1.2,
-                  opacity: 1,
-                  rx: 1,
-                }}
+              <rect
+                x={rect.x}
+                y={rect.y}
+                width={rect.w}
+                height={rect.h}
                 fill="none"
-                stroke="rgba(255,255,255,0.7)"
-                strokeWidth="1.2"
-                style={{ vectorEffect: 'non-scaling-stroke' } as React.CSSProperties}
-                transition={{
-                  duration: 0.5,
-                  delay: 0.05,
-                  ease: [0.16, 1, 0.3, 1],
-                }}
+                stroke="rgba(255,255,255,0.78)"
+                strokeWidth="1.4"
+                rx="1.2"
+                vectorEffect="non-scaling-stroke"
               />
             </svg>
           </motion.div>

@@ -14,9 +14,9 @@ import type {
 import { buildPrompt, PROMPT_IDS } from './prompts';
 import { formatImageDescription, formatImagePlaceholder } from './prompt-formatters';
 import { parseJsonResponse } from './json-repair';
-import { uniquifyMediaElementIds } from './scene-builder';
 import type { AICallFn, GenerationResult, GenerationCallbacks } from './pipeline-types';
 import { createLogger } from '@/lib/logger';
+import { normalizeReviewRecallOutlines } from './review-recall-outline-normalizer';
 const log = createLogger('Generation');
 
 /**
@@ -32,8 +32,6 @@ export async function generateSceneOutlinesFromRequirements(
   options?: {
     visionEnabled?: boolean;
     imageMapping?: ImageMapping;
-    imageGenerationEnabled?: boolean;
-    videoGenerationEnabled?: boolean;
     researchContext?: string;
     teacherContext?: string;
   },
@@ -76,23 +74,11 @@ export async function generateSceneOutlinesFromRequirements(
   // Build user profile string for prompt injection
   const userProfileText =
     requirements.userNickname || requirements.userBio
-      ? `## Student Profile\n\nStudent: ${requirements.userNickname || 'Unknown'}${requirements.userBio ? ` — ${requirements.userBio}` : ''}\n\nConsider this student's background when designing the course. Adapt difficulty, examples, and teaching approach accordingly.\n\n---`
+      ? `## Student Profile\n\nStudent: ${requirements.userNickname || 'Unknown'}${requirements.userBio ? ` - ${requirements.userBio}` : ''}\n\nConsider this student's background when designing the course. Adapt difficulty, examples, and teaching approach accordingly.\n\n---`
       : '';
 
-  // Build media generation policy based on enabled flags
-  const imageEnabled = options?.imageGenerationEnabled ?? false;
-  const videoEnabled = options?.videoGenerationEnabled ?? false;
-  let mediaGenerationPolicy = '';
-  if (!imageEnabled && !videoEnabled) {
-    mediaGenerationPolicy =
-      '**IMPORTANT: Do NOT include any mediaGenerations in the outlines. Both image and video generation are disabled.**';
-  } else if (!imageEnabled) {
-    mediaGenerationPolicy =
-      '**IMPORTANT: Do NOT include any image mediaGenerations (type: "image") in the outlines. Image generation is disabled. Video generation is allowed.**';
-  } else if (!videoEnabled) {
-    mediaGenerationPolicy =
-      '**IMPORTANT: Do NOT include any video mediaGenerations (type: "video") in the outlines. Video generation is disabled. Image generation is allowed.**';
-  }
+  const mediaGenerationPolicy =
+    '**IMPORTANT: Do NOT include any mediaGenerations in the outlines. AI image and video generation are not available in this classroom pipeline.**';
 
   // Use simplified prompt variables
   const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
@@ -137,26 +123,26 @@ export async function generateSceneOutlinesFromRequirements(
       };
     }
     // Ensure IDs, order, and language
-    const enriched = outlines.map((outline, index) => ({
-      ...outline,
-      id: outline.id || nanoid(),
-      order: index + 1,
-      language: requirements.language,
-    }));
-
-    // Replace sequential gen_img_N/gen_vid_N with globally unique IDs
-    const result = uniquifyMediaElementIds(enriched);
+    const enriched = normalizeReviewRecallOutlines(
+      outlines.map((outline, index) => ({
+        ...outline,
+        id: outline.id || nanoid(),
+        order: index + 1,
+        language: requirements.language,
+      })),
+      requirements.language,
+    );
 
     callbacks?.onProgress?.({
       currentStage: 1,
       overallProgress: 50,
       stageProgress: 100,
-      statusMessage: `已生成 ${result.length} 个场景大纲`,
+      statusMessage: `已生成 ${enriched.length} 个场景大纲`,
       scenesGenerated: 0,
-      totalScenes: result.length,
+      totalScenes: enriched.length,
     });
 
-    return { success: true, data: result };
+    return { success: true, data: enriched };
   } catch (error) {
     return { success: false, error: String(error) };
   }
@@ -164,8 +150,8 @@ export async function generateSceneOutlinesFromRequirements(
 
 /**
  * Apply type fallbacks for outlines that can't be generated as their declared type.
- * - interactive without interactiveConfig → slide
- * - pbl without pblConfig or languageModel → slide
+ * - interactive without interactiveConfig -> slide
+ * - pbl without pblConfig or languageModel -> slide
  */
 export function applyOutlineFallbacks(
   outline: SceneOutline,

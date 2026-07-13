@@ -65,11 +65,11 @@ export function SpeechButton({
           disabled={disabled || isProcessing}
           onClick={handleClick}
           className={cn(
-            'relative flex items-center justify-center rounded-lg transition-all duration-200 shrink-0 cursor-pointer',
+            'relative flex items-center justify-center rounded-full transition-all duration-200 shrink-0 cursor-pointer',
             sizeClasses,
             active
               ? 'bg-violet-500/90 dark:bg-violet-600/80 text-white shadow-[0_0_12px_rgba(139,92,246,0.45)] dark:shadow-[0_0_12px_rgba(139,92,246,0.3)]'
-              : 'text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/80',
+              : 'text-slate-500/80 hover:text-slate-700 hover:bg-slate-100/80 dark:text-slate-400 dark:hover:text-slate-100 dark:hover:bg-white/10',
             disabled && 'opacity-40 pointer-events-none',
             className,
           )}

@@ -1,19 +1,23 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { Languages } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { supportedLocales } from '@/lib/i18n';
+import { supportedLocales, type Locale } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
 interface LanguageSwitcherProps {
   /** Called when the dropdown opens, so parent can close sibling dropdowns */
   onOpen?: () => void;
+  /** Called after a locale is selected */
+  onLocaleChange?: (locale: Locale) => void;
 }
 
-export function LanguageSwitcher({ onOpen }: LanguageSwitcherProps) {
+export function LanguageSwitcher({ onOpen, onLocaleChange }: LanguageSwitcherProps) {
   const { locale, setLocale } = useI18n();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const currentLocale = supportedLocales.find((l) => l.code === locale);
 
   // Close on click outside
   useEffect(() => {
@@ -35,17 +39,20 @@ export function LanguageSwitcher({ onOpen }: LanguageSwitcherProps) {
           setOpen(next);
           if (next) onOpen?.();
         }}
-        className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold text-gray-500 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all"
+        className="flex size-9 items-center justify-center rounded-full text-slate-500/80 transition-all hover:bg-white/[0.55] hover:text-slate-700 hover:shadow-[0_10px_30px_rgba(139,92,246,0.10)] dark:text-slate-300/75 dark:hover:bg-white/10 dark:hover:text-slate-100"
+        title={currentLocale?.label ?? locale}
+        aria-label={currentLocale?.label ?? locale}
       >
-        {supportedLocales.find((l) => l.code === locale)?.shortLabel ?? locale}
+        <Languages className="size-4" />
       </button>
       {open && (
-        <div className="absolute top-full mt-2 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg overflow-hidden z-50 min-w-[120px]">
+        <div className="absolute top-full mt-3 right-0 z-50 min-w-[120px] overflow-hidden rounded-xl border border-white/70 bg-white/90 shadow-[0_18px_50px_rgba(87,73,120,0.14)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-900/90">
           {supportedLocales.map((l) => (
             <button
               key={l.code}
               onClick={() => {
                 setLocale(l.code);
+                onLocaleChange?.(l.code);
                 setOpen(false);
               }}
               className={cn(

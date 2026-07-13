@@ -1,12 +1,22 @@
 'use client';
 
 import type { PPTShapeElement, ShapeText } from '@/lib/types/slides';
+import { DEFAULT_SCREEN_FONT_NAME, resolveScreenFontFamily } from '@/lib/constants/fonts';
+import {
+  ensureCenteredParagraphText,
+  hasCenteredTextAlign,
+  hasExplicitTextAlign,
+  shouldAutoCenterBoxText,
+} from '@/lib/utils/text-box-alignment';
 import { useElementOutline } from '../hooks/useElementOutline';
 import { useElementShadow } from '../hooks/useElementShadow';
 import { useElementFlip } from '../hooks/useElementFlip';
 import { useElementFill } from '../hooks/useElementFill';
 import { GradientDefs } from './GradientDefs';
 import { PatternDefs } from './PatternDefs';
+import { AutoFitTextBox } from '../AutoFitTextBox';
+import { repairMathDisplayText } from '@/lib/utils/math-display-repair';
+import { normalizeShapeViewBox } from '@/lib/utils/shape-view-box';
 
 export interface BaseShapeElementProps {
   elementInfo: PPTShapeElement;
@@ -24,9 +34,28 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
   const text: ShapeText = elementInfo.text || {
     content: '',
     align: 'middle',
-    defaultFontName: 'Microsoft YaHei',
+    defaultFontName: DEFAULT_SCREEN_FONT_NAME,
     defaultColor: '#333333',
   };
+  const repairedContent = repairMathDisplayText(text.content);
+  const canAutoCenterText =
+    !hasExplicitTextAlign(repairedContent) || hasCenteredTextAlign(repairedContent);
+  const shouldForceCenterText =
+    canAutoCenterText &&
+    text.align === 'middle' &&
+    shouldAutoCenterBoxText({
+      html: repairedContent,
+      boxWidth: elementInfo.width,
+      boxHeight: elementInfo.height,
+    });
+  const renderedTextHtml = shouldForceCenterText
+    ? ensureCenteredParagraphText(repairedContent)
+    : repairedContent;
+  const [viewBoxWidth, viewBoxHeight] = normalizeShapeViewBox(
+    elementInfo.viewBox,
+    elementInfo.width,
+    elementInfo.height,
+  );
 
   return (
     <div
@@ -49,7 +78,7 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
             filter: shadowStyle ? `drop-shadow(${shadowStyle})` : '',
             transform: flipStyle,
             color: text.defaultColor,
-            fontFamily: text.defaultFontName,
+            fontFamily: resolveScreenFontFamily(text.defaultFontName),
           }}
         >
           <svg
@@ -72,8 +101,8 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
               )}
             </defs>
             <g
-              transform={`scale(${elementInfo.width / elementInfo.viewBox[0]}, ${
-                elementInfo.height / elementInfo.viewBox[1]
+              transform={`scale(${elementInfo.width / viewBoxWidth}, ${
+                elementInfo.height / viewBoxHeight
               }) translate(0,0) matrix(1,0,0,1,0,0)`}
             >
               <path
@@ -89,28 +118,20 @@ export function BaseShapeElement({ elementInfo }: BaseShapeElementProps) {
             </g>
           </svg>
 
-          <div
-            className={`shape-text flex flex-col px-2.5 py-2.5 leading-relaxed break-words absolute inset-0 ${
-              text.align === 'top'
-                ? 'justify-start'
-                : text.align === 'bottom'
-                  ? 'justify-end'
-                  : 'justify-center'
-            }`}
+          <AutoFitTextBox
+            className="shape-text absolute inset-0 px-2.5 py-2.5 leading-relaxed break-words"
+            contentClassName="ProseMirror-static [&_p]:m-0 [&_p+_p]:mt-[var(--paragraphSpace)] [&_ol]:my-0 [&_ul]:my-0 [&_li]:my-0"
+            verticalAlign={text.align}
             style={{
               lineHeight: text.lineHeight,
               letterSpacing: `${text.wordSpace || 0}px`,
+              textAlign: shouldForceCenterText ? 'center' : undefined,
+              // @ts-expect-error CSS custom properties
+              '--paragraphSpace': `${text.paragraphSpace === undefined ? 5 : text.paragraphSpace}px`,
             }}
           >
-            <div
-              className="ProseMirror-static [&_p]:mb-[var(--paragraphSpace)]"
-              style={{
-                // @ts-expect-error CSS custom properties
-                '--paragraphSpace': `${text.paragraphSpace === undefined ? 5 : text.paragraphSpace}px`,
-              }}
-              dangerouslySetInnerHTML={{ __html: text.content }}
-            />
-          </div>
+            <div dangerouslySetInnerHTML={{ __html: renderedTextHtml }} />
+          </AutoFitTextBox>
         </div>
       </div>
     </div>

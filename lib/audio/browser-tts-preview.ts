@@ -3,6 +3,7 @@
 const VOICES_LOAD_TIMEOUT_MS = 2000;
 const PREVIEW_TIMEOUT_MS = 30000;
 const CJK_LANG_THRESHOLD = 0.3;
+const CANCEL_FLUSH_MS = 80;
 
 type PlayBrowserTTSPreviewOptions = {
   text: string;
@@ -185,11 +186,14 @@ export function playBrowserTTSPreview(options: PlayBrowserTTSPreviewOptions): {
         }, PREVIEW_TIMEOUT_MS);
 
         synth.cancel();
-        if (canceled) {
-          settleReject(reject, createAbortError());
-          return;
-        }
-        synth.speak(utterance);
+        window.setTimeout(() => {
+          if (settled) return;
+          if (canceled) {
+            settleReject(reject, createAbortError());
+            return;
+          }
+          synth.speak(utterance);
+        }, CANCEL_FLUSH_MS);
       } catch (error) {
         settleReject(reject, error);
       }

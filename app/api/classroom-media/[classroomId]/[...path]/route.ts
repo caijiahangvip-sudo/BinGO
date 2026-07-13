@@ -3,6 +3,7 @@ import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
 import { CLASSROOMS_DIR, isValidClassroomId } from '@/lib/server/classroom-storage';
 import { createLogger } from '@/lib/logger';
+import { getAudioMimeType } from '@/lib/audio/mime';
 
 const log = createLogger('ClassroomMedia');
 
@@ -17,7 +18,10 @@ const MIME_TYPES: Record<string, string> = {
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
   '.ogg': 'audio/ogg',
+  '.opus': 'audio/ogg',
   '.aac': 'audio/aac',
+  '.m4a': 'audio/mp4',
+  '.flac': 'audio/flac',
 };
 
 export async function GET(
@@ -59,7 +63,10 @@ export async function GET(
     }
 
     const ext = path.extname(realPath).toLowerCase();
-    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+    const contentType =
+      subDir === 'audio'
+        ? getAudioMimeType(ext.slice(1))
+        : MIME_TYPES[ext] || 'application/octet-stream';
 
     // Stream the file to avoid loading large videos into memory
     const stream = createReadStream(realPath);

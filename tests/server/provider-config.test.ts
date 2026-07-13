@@ -141,6 +141,63 @@ providers:
 
       expect(providers.openai).toBeUndefined();
     });
+
+    it('does not expose Doubao as a server-side LLM provider', async () => {
+      vi.stubEnv('DOUBAO_API_KEY', 'sk-doubao');
+      yamlOverride = `
+providers:
+  doubao:
+    apiKey: sk-yaml-doubao
+`;
+      const { getServerProviders, resolveApiKey } = await import('@/lib/server/provider-config');
+      const providers = getServerProviders();
+
+      expect(providers.doubao).toBeUndefined();
+      expect(resolveApiKey('doubao')).toBe('');
+    });
+  });
+
+  describe('TTS providers', () => {
+    it('exposes local CosyVoice TTS with only a base URL', async () => {
+      vi.stubEnv('TTS_COSYVOICE_BASE_URL', 'http://127.0.0.1:50000');
+      const { getServerTTSProviders, resolveTTSBaseUrl } =
+        await import('@/lib/server/provider-config');
+      const providers = getServerTTSProviders();
+
+      expect(providers['cosyvoice-tts']).toEqual({
+        baseUrl: 'http://127.0.0.1:50000',
+      });
+      expect(resolveTTSBaseUrl('cosyvoice-tts')).toBe('http://127.0.0.1:50000');
+    });
+
+    it('does not expose Doubao TTS as a server-side TTS provider', async () => {
+      vi.stubEnv('TTS_DOUBAO_API_KEY', 'app-id:access-key');
+      yamlOverride = `
+tts:
+  doubao-tts:
+    apiKey: yaml-app-id:yaml-access-key
+`;
+      const { getServerTTSProviders, resolveTTSApiKey } =
+        await import('@/lib/server/provider-config');
+      const providers = getServerTTSProviders();
+
+      expect(providers['doubao-tts']).toBeUndefined();
+      expect(resolveTTSApiKey('doubao-tts')).toBe('');
+    });
+  });
+
+  describe('ASR providers', () => {
+    it('exposes local SenseVoice ASR with only a base URL', async () => {
+      vi.stubEnv('ASR_SENSEVOICE_BASE_URL', 'http://127.0.0.1:50001');
+      const { getServerASRProviders, resolveASRBaseUrl } =
+        await import('@/lib/server/provider-config');
+      const providers = getServerASRProviders();
+
+      expect(providers['sensevoice-asr']).toEqual({
+        baseUrl: 'http://127.0.0.1:50001',
+      });
+      expect(resolveASRBaseUrl('sensevoice-asr')).toBe('http://127.0.0.1:50001');
+    });
   });
 
   describe('env var model parsing', () => {
@@ -167,39 +224,119 @@ providers:
     });
   });
 
-  describe('baseUrl-only providers (e.g. mineru)', () => {
-    it('includes PDF provider from YAML when only baseUrl is configured (no apiKey)', async () => {
+  describe('PDF providers', () => {
+    it('exposes MinerU local PDF provider from YAML when base URL is configured', async () => {
       yamlOverride = `
 pdf:
-  mineru:
+  mineru-local:
     baseUrl: http://localhost:8888
 `;
-      const { getServerPDFProviders } = await import('@/lib/server/provider-config');
+      const { getServerPDFProviders, resolvePDFBaseUrl } =
+        await import('@/lib/server/provider-config');
       const providers = getServerPDFProviders();
 
-      expect(providers.mineru).toBeDefined();
-      expect(providers.mineru.baseUrl).toBe('http://localhost:8888');
+      expect(providers).toEqual({
+        'mineru-local': { baseUrl: 'http://localhost:8888' },
+      });
+      expect(resolvePDFBaseUrl('mineru-local')).toBe('http://localhost:8888');
     });
 
-    it('includes provider from env when only BASE_URL is set (no API_KEY)', async () => {
-      vi.stubEnv('PDF_MINERU_BASE_URL', 'http://localhost:8888');
-      const { getServerPDFProviders } = await import('@/lib/server/provider-config');
+    it('exposes MinerU local PDF provider from env when base URL is configured', async () => {
+      vi.stubEnv('PDF_MINERU_LOCAL_BASE_URL', 'http://localhost:8888');
+      const { getServerPDFProviders, resolvePDFBaseUrl } =
+        await import('@/lib/server/provider-config');
       const providers = getServerPDFProviders();
 
-      expect(providers.mineru).toBeDefined();
-      expect(providers.mineru.baseUrl).toBe('http://localhost:8888');
+      expect(providers).toEqual({
+        'mineru-local': { baseUrl: 'http://localhost:8888' },
+      });
+      expect(resolvePDFBaseUrl('mineru-local')).toBe('http://localhost:8888');
     });
 
-    it('excludes PDF provider when only apiKey is configured (no baseUrl)', async () => {
+    it('does not expose MinerU local without a base URL', async () => {
       yamlOverride = `
 pdf:
-  mineru:
+  mineru-local:
     apiKey: sk-fake
 `;
       const { getServerPDFProviders } = await import('@/lib/server/provider-config');
       const providers = getServerPDFProviders();
 
-      expect(providers.mineru).toBeUndefined();
+      expect(providers).toEqual({});
+    });
+  });
+
+  describe('Vector providers', () => {
+    it('exposes vector providers from env without leaking API keys', async () => {
+      vi.stubEnv('VECTOR_OPENAI_API_KEY', 'sk-openai-vector');
+      vi.stubEnv('VECTOR_OPENAI_BASE_URL', 'https://proxy.openai.com/v1');
+      vi.stubEnv('VECTOR_OPENAI_MODELS', 'text-embedding-3-small, text-embedding-3-large');
+      vi.stubEnv('VECTOR_QWEN_API_KEY', 'sk-qwen-vector');
+      vi.stubEnv('BINGO_EMBEDDING_BASE_URL', 'http://127.0.0.1:50003');
+
+      const { getServerVectorProviders, resolveVectorApiKey, resolveVectorBaseUrl } =
+        await import('@/lib/server/provider-config');
+      const providers = getServerVectorProviders();
+
+      expect(providers['openai-embedding']).toEqual({
+        models: ['text-embedding-3-small', 'text-embedding-3-large'],
+        baseUrl: 'https://proxy.openai.com/v1',
+      });
+      expect(providers['qwen-embedding']).toEqual({});
+      expect(providers.siliconflow).toEqual({
+        models: ['BAAI/bge-base-zh-v1.5'],
+        baseUrl: 'http://127.0.0.1:50003',
+      });
+      expect((providers['openai-embedding'] as Record<string, unknown>).apiKey).toBeUndefined();
+      expect(resolveVectorApiKey('openai-embedding')).toBe('sk-openai-vector');
+      expect(resolveVectorApiKey('qwen-embedding')).toBe('sk-qwen-vector');
+      expect(resolveVectorBaseUrl('chinese-xinhua-local')).toBe('http://127.0.0.1:50003');
+      expect(resolveVectorBaseUrl('siliconflow')).toBe('http://127.0.0.1:50003');
+    });
+
+    it('loads vector providers from YAML', async () => {
+      yamlOverride = `
+vector:
+  openai-embedding:
+    apiKey: sk-yaml-vector
+    baseUrl: https://proxy.example.com/v1
+    models:
+      - text-embedding-3-small
+  chinese-xinhua-local:
+    baseUrl: http://localhost:8888
+`;
+      const { getServerVectorProviders, resolveVectorApiKey, resolveVectorBaseUrl } =
+        await import('@/lib/server/provider-config');
+      const providers = getServerVectorProviders();
+
+      expect(providers['openai-embedding']).toEqual({
+        models: ['text-embedding-3-small'],
+        baseUrl: 'https://proxy.example.com/v1',
+      });
+      expect(providers.siliconflow).toEqual({
+        models: ['BAAI/bge-base-zh-v1.5'],
+        baseUrl: 'http://localhost:8888',
+      });
+      expect(resolveVectorApiKey('openai-embedding')).toBe('sk-yaml-vector');
+      expect(resolveVectorBaseUrl('openai-embedding')).toBe('https://proxy.example.com/v1');
+    });
+
+    it('merges local BGE into SiliconFlow without overriding remote SiliconFlow config', async () => {
+      vi.stubEnv('VECTOR_SILICONFLOW_API_KEY', 'sk-siliconflow-vector');
+      vi.stubEnv('VECTOR_SILICONFLOW_BASE_URL', 'https://api.siliconflow.cn/v1');
+      vi.stubEnv('VECTOR_SILICONFLOW_MODELS', 'BAAI/bge-m3');
+      vi.stubEnv('BINGO_EMBEDDING_BASE_URL', 'http://127.0.0.1:50003');
+
+      const { getServerVectorProviders, resolveVectorApiKey, resolveVectorBaseUrl } =
+        await import('@/lib/server/provider-config');
+      const providers = getServerVectorProviders();
+
+      expect(providers.siliconflow).toEqual({
+        models: ['BAAI/bge-base-zh-v1.5', 'BAAI/bge-m3'],
+        baseUrl: 'https://api.siliconflow.cn/v1',
+      });
+      expect(resolveVectorApiKey('siliconflow')).toBe('sk-siliconflow-vector');
+      expect(resolveVectorBaseUrl('siliconflow')).toBe('https://api.siliconflow.cn/v1');
     });
   });
 });

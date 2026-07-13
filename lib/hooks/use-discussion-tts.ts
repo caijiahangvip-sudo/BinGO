@@ -8,6 +8,7 @@ import {
   getAvailableProvidersWithVoices,
   type ResolvedVoice,
 } from '@/lib/audio/voice-resolver';
+import { getAudioMimeType } from '@/lib/audio/mime';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { TTSProviderId } from '@/lib/audio/types';
 import type { AudioIndicatorState } from '@/components/roundtable/audio-indicator';
@@ -24,6 +25,7 @@ interface QueueItem {
   text: string;
   agentId: string | null;
   providerId: TTSProviderId;
+  compatibleProviderId: TTSProviderId;
   modelId?: string;
   voiceId: string;
 }
@@ -133,15 +135,15 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     const item = queueRef.current.shift()!;
 
     // Browser TTS
-    if (item.providerId === 'browser-native-tts') {
-      currentProviderRef.current = item.providerId;
+    if (item.compatibleProviderId === 'browser-native-tts') {
+      currentProviderRef.current = item.compatibleProviderId;
       onAudioStateChangeRef.current?.(item.agentId, 'playing');
       browserSpeakRef.current(item.text, item.voiceId);
       return;
     }
 
     // Server TTS — use the item's provider, not the global one
-    currentProviderRef.current = item.providerId;
+    currentProviderRef.current = item.compatibleProviderId;
     onAudioStateChangeRef.current?.(item.agentId, 'generating');
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -155,11 +157,13 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
           text: item.text,
           audioId: item.partId,
           ttsProviderId: item.providerId,
+          ttsCompatibleProviderId: item.compatibleProviderId,
           ttsModelId: item.modelId || providerConfig?.modelId,
           ttsVoice: item.voiceId,
           ttsSpeed: ttsSpeed,
           ttsApiKey: providerConfig?.apiKey,
           ttsBaseUrl: providerConfig?.serverBaseUrl || providerConfig?.baseUrl,
+          ttsProviderOptions: providerConfig?.providerOptions,
         }),
         signal: controller.signal,
       });
@@ -169,7 +173,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       const data = await res.json();
       if (!data.base64) throw new Error('No audio in response');
 
-      const audioUrl = `data:audio/${data.format || 'mp3'};base64,${data.base64}`;
+      const audioUrl = `data:${getAudioMimeType(data.format || 'mp3')};base64,${data.base64}`;
       const audio = new Audio(audioUrl);
       audio.playbackRate = playbackSpeed;
       audio.volume = ttsMuted ? 0 : ttsVolume;
@@ -223,23 +227,26 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       if (!enabled || ttsMuted || !fullText.trim()) return;
 
       const { providerId, modelId, voiceId } = resolveVoiceForAgent(agentId);
+      const providerConfig = ttsProvidersConfig[providerId];
+      const compatibleProviderId = providerConfig?.compatibleProviderId || providerId;
       queueRef.current.push({
         messageId,
         partId,
         text: fullText,
         agentId,
         providerId,
+        compatibleProviderId,
         modelId,
         voiceId,
       });
 
       if (!isPlayingRef.current) {
         processQueueRef.current();
-      } else if (providerId !== 'browser-native-tts') {
+      } else if (compatibleProviderId !== 'browser-native-tts') {
         onAudioStateChangeRef.current?.(agentId, 'generating');
       }
     },
-    [enabled, ttsMuted, resolveVoiceForAgent],
+    [enabled, ttsMuted, resolveVoiceForAgent, ttsProvidersConfig],
   );
 
   const cleanup = useCallback(() => {

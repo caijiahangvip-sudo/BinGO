@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import type { PPTTableElement } from '@/lib/types/slides';
+import type { PPTTableElement, TableCell } from '@/lib/types/slides';
 import { getTableSubThemeColor } from '@/lib/utils/element';
 import { getTextStyle, formatText, getHiddenCells } from './tableUtils';
 
@@ -9,12 +9,77 @@ interface StaticTableProps {
   elementInfo: PPTTableElement;
 }
 
+function asPositiveInteger(value: unknown, fallback: number): number {
+  const number = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(number) || number < 1) return fallback;
+  return Math.floor(number);
+}
+
+function normalizeTableData(value: unknown): TableCell[][] {
+  if (!Array.isArray(value)) return [];
+
+  let generatedId = 0;
+  return value
+    .filter((row): row is unknown[] => Array.isArray(row))
+    .map((row) =>
+      row.map((rawCell) => {
+        const cell =
+          typeof rawCell === 'object' && rawCell !== null
+            ? (rawCell as Partial<TableCell>)
+            : { text: String(rawCell ?? '') };
+
+        const id =
+          typeof cell.id === 'string' && cell.id.trim() ? cell.id : `table_cell_${generatedId++}`;
+
+        return {
+          id,
+          colspan: asPositiveInteger(cell.colspan, 1),
+          rowspan: asPositiveInteger(cell.rowspan, 1),
+          text: typeof cell.text === 'string' ? cell.text : String(cell.text ?? ''),
+          style: cell.style,
+        };
+      }),
+    );
+}
+
+function getColumnCount(data: readonly TableCell[][]): number {
+  return data.reduce((max, row) => {
+    const rowColumns = row.reduce((total, cell) => total + Math.max(1, cell.colspan ?? 1), 0);
+    return Math.max(max, rowColumns);
+  }, 0);
+}
+
+function normalizeColWidths(value: unknown, columnCount: number): number[] {
+  if (columnCount <= 0) return [];
+
+  const fallback = Array(columnCount).fill(1 / columnCount);
+  if (!Array.isArray(value)) return fallback;
+
+  const parsed = value
+    .slice(0, columnCount)
+    .map((item) => (typeof item === 'number' ? item : Number(item)))
+    .filter((item) => Number.isFinite(item) && item > 0);
+  if (parsed.length !== columnCount) return fallback;
+
+  const total = parsed.reduce((sum, item) => sum + item, 0);
+  if (total <= 0) return fallback;
+  return parsed.map((item) => item / total);
+}
+
 /**
  * Static table rendering component, ported from PPTist StaticTable.vue.
  * Renders table data with theme colors, outline borders, and merged cells.
  */
 export function StaticTable({ elementInfo }: StaticTableProps) {
-  const { width, data, colWidths, cellMinHeight, outline, theme } = elementInfo;
+  const { width, cellMinHeight, outline, theme } = elementInfo;
+  const data = useMemo(() => normalizeTableData(elementInfo.data), [elementInfo.data]);
+  const colWidths = useMemo(
+    () => normalizeColWidths(elementInfo.colWidths, getColumnCount(data)),
+    [data, elementInfo.colWidths],
+  );
+  const safeWidth = Number.isFinite(width) && width > 0 ? width : 1;
+  const safeCellMinHeight =
+    Number.isFinite(cellMinHeight) && cellMinHeight > 0 ? cellMinHeight : 36;
 
   const hiddenCells = useMemo(() => getHiddenCells(data), [data]);
 
@@ -72,6 +137,8 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
     return undefined;
   };
 
+  if (data.length === 0 || colWidths.length === 0) return null;
+
   return (
     <table
       className="w-full h-full"
@@ -82,12 +149,12 @@ export function StaticTable({ elementInfo }: StaticTableProps) {
     >
       <colgroup>
         {colWidths.map((w, i) => (
-          <col key={i} style={{ width: `${w * width}px` }} />
+          <col key={i} style={{ width: `${w * safeWidth}px` }} />
         ))}
       </colgroup>
       <tbody>
         {data.map((row, rowIdx) => (
-          <tr key={rowIdx} style={{ height: `${cellMinHeight}px` }}>
+          <tr key={rowIdx} style={{ height: `${safeCellMinHeight}px` }}>
             {row.map((cell, colIdx) => {
               if (hiddenCells.has(`${rowIdx}_${colIdx}`)) return null;
 

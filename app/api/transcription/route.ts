@@ -5,9 +5,125 @@ import type { ASRProviderId } from '@/lib/audio/types';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
+import {
+  ensureLocalModelServiceRunning,
+  releaseLocalModelServicesSafely,
+} from '@/lib/server/local-model-services';
 const log = createLogger('Transcription');
 
-export const maxDuration = 60;
+export const maxDuration = 900;
+
+const SENSEVOICE_DEFAULT_PORT = 50001;
+const DEFAULT_SENSEVOICE_IDLE_RELEASE_MS = 5 * 60 * 1000;
+const MIN_LOCAL_SERVICE_TEST_TIMEOUT_MS = 5_000;
+const MAX_LOCAL_SERVICE_TEST_TIMEOUT_MS = 10 * 60 * 1000;
+
+let activeSenseVoiceRequests = 0;
+let senseVoiceReleaseTimer: ReturnType<typeof setTimeout> | undefined;
+
+function isSenseVoiceUnavailableError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('SenseVoice local service is not reachable');
+}
+
+function resolveSenseVoicePort(baseUrl?: string): number {
+  if (!baseUrl) return SENSEVOICE_DEFAULT_PORT;
+
+  try {
+    const parsed = new URL(baseUrl);
+    if (parsed.port) {
+      const port = Number.parseInt(parsed.port, 10);
+      if (Number.isFinite(port) && port > 0) return port;
+    }
+
+    return parsed.protocol === 'https:' ? 443 : 80;
+  } catch {
+    return SENSEVOICE_DEFAULT_PORT;
+  }
+}
+
+function getSenseVoiceIdleReleaseMs(): number {
+  const envValue = Number.parseInt(process.env.BINGO_SENSEVOICE_IDLE_RELEASE_MS ?? '', 10);
+  return Number.isFinite(envValue) && envValue >= 0
+    ? envValue
+    : DEFAULT_SENSEVOICE_IDLE_RELEASE_MS;
+}
+
+function parseLocalServiceStartupTimeoutMs(value: FormDataEntryValue | null): number | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return Math.min(
+    Math.max(parsed, MIN_LOCAL_SERVICE_TEST_TIMEOUT_MS),
+    MAX_LOCAL_SERVICE_TEST_TIMEOUT_MS,
+  );
+}
+
+function beginSenseVoiceRequest(): void {
+  activeSenseVoiceRequests += 1;
+  if (senseVoiceReleaseTimer) {
+    clearTimeout(senseVoiceReleaseTimer);
+    senseVoiceReleaseTimer = undefined;
+  }
+}
+
+function scheduleSenseVoiceIdleRelease(keepWarm: boolean): void {
+  activeSenseVoiceRequests = Math.max(0, activeSenseVoiceRequests - 1);
+  if (keepWarm || activeSenseVoiceRequests > 0) return;
+
+  if (senseVoiceReleaseTimer) {
+    clearTimeout(senseVoiceReleaseTimer);
+  }
+
+  const idleMs = getSenseVoiceIdleReleaseMs();
+  senseVoiceReleaseTimer = setTimeout(() => {
+    senseVoiceReleaseTimer = undefined;
+    if (activeSenseVoiceRequests > 0) return;
+
+    log.info(`Releasing SenseVoice after ${idleMs}ms idle.`);
+    releaseLocalModelServicesSafely(['sensevoice']).catch((error) => {
+      log.warn('Failed to release idle SenseVoice service:', error);
+    });
+  }, idleMs);
+
+  senseVoiceReleaseTimer.unref?.();
+}
+
+async function transcribeAudioWithLocalSenseVoiceRetry(
+  config: Parameters<typeof transcribeAudio>[0],
+  buffer: Buffer,
+  startupTimeoutMs?: number,
+) {
+  let requestConfig = config;
+  if (config.providerId === 'sensevoice-asr' && startupTimeoutMs) {
+    const port = resolveSenseVoicePort(config.baseUrl);
+    const serviceResult = await ensureLocalModelServiceRunning('sensevoice', {
+      port,
+      timeoutMs: startupTimeoutMs,
+    });
+    requestConfig = serviceResult?.baseUrl ? { ...config, baseUrl: serviceResult.baseUrl } : config;
+  }
+
+  try {
+    return await transcribeAudio(requestConfig, buffer);
+  } catch (error) {
+    if (requestConfig.providerId !== 'sensevoice-asr' || !isSenseVoiceUnavailableError(error)) {
+      throw error;
+    }
+
+    const port = resolveSenseVoicePort(requestConfig.baseUrl);
+    log.warn(`SenseVoice is not reachable; starting local service on port ${port} and retrying.`);
+    const serviceResult = await ensureLocalModelServiceRunning('sensevoice', {
+      port,
+      ...(startupTimeoutMs ? { timeoutMs: startupTimeoutMs } : {}),
+    });
+    return transcribeAudio(
+      serviceResult?.baseUrl
+        ? { ...requestConfig, baseUrl: serviceResult.baseUrl }
+        : requestConfig,
+      buffer,
+    );
+  }
+}
 
 export async function POST(req: NextRequest) {
   let resolvedProviderId: string | undefined;
@@ -16,18 +132,27 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const audioFile = formData.get('audio') as File;
     const providerId = formData.get('providerId') as ASRProviderId | null;
+    const compatibleProviderId = formData.get('compatibleProviderId') as ASRProviderId | null;
     const modelId = formData.get('modelId') as string | null;
     const language = formData.get('language') as string | null;
     const apiKey = formData.get('apiKey') as string | null;
     const baseUrl = formData.get('baseUrl') as string | null;
+    const keepServiceWarm = formData.get('keepServiceWarm') === 'true';
+    const localServiceStartupTimeoutMs = parseLocalServiceStartupTimeoutMs(
+      formData.get('localServiceStartupTimeoutMs'),
+    );
 
     if (!audioFile) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Audio file is required');
     }
 
     // providerId is required from the client — no server-side store to fall back to
-    const effectiveProviderId = providerId || ('openai-whisper' as ASRProviderId);
-    resolvedProviderId = effectiveProviderId;
+    const requestedProviderId = providerId || ('openai-whisper' as ASRProviderId);
+    const effectiveProviderId = compatibleProviderId || requestedProviderId;
+    resolvedProviderId =
+      requestedProviderId === effectiveProviderId
+        ? effectiveProviderId
+        : `${requestedProviderId} -> ${effectiveProviderId}`;
     resolvedModelId = modelId ?? undefined;
 
     const clientBaseUrl = baseUrl || undefined;
@@ -55,7 +180,22 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     // Transcribe using the provider system
-    const result = await transcribeAudio(config, buffer);
+    const shouldScheduleSenseVoiceRelease = config.providerId === 'sensevoice-asr';
+    if (shouldScheduleSenseVoiceRelease) {
+      beginSenseVoiceRequest();
+    }
+    let result: Awaited<ReturnType<typeof transcribeAudio>>;
+    try {
+      result = await transcribeAudioWithLocalSenseVoiceRetry(
+        config,
+        buffer,
+        localServiceStartupTimeoutMs,
+      );
+    } finally {
+      if (shouldScheduleSenseVoiceRelease) {
+        scheduleSenseVoiceIdleRelease(keepServiceWarm);
+      }
+    }
 
     return apiSuccess({ text: result.text });
   } catch (error) {

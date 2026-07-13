@@ -1,7 +1,7 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
-import { Box, Plus } from 'lucide-react';
+import { Box, Minus, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import type { ProviderId, ProviderConfig } from '@/lib/ai/providers';
@@ -15,6 +15,7 @@ interface ProviderListProps {
   selectedProviderId: ProviderId;
   onSelect: (providerId: ProviderId) => void;
   onAddProvider: () => void;
+  onDeleteProvider: (providerId: ProviderId) => void;
   width?: number;
 }
 
@@ -23,9 +24,11 @@ export function ProviderList({
   selectedProviderId,
   onSelect,
   onAddProvider,
+  onDeleteProvider,
   width,
 }: ProviderListProps) {
   const { t } = useI18n();
+  const selectedProvider = providers.find((provider) => provider.id === selectedProviderId);
 
   // Helper function to get translated provider name
   const getProviderDisplayName = (provider: ProviderConfig) => {
@@ -73,12 +76,26 @@ export function ProviderList({
         ))}
       </div>
 
-      {/* Add Provider Button */}
+      {/* Provider actions */}
       <div className="p-3 border-t">
-        <Button variant="outline" size="sm" className="w-full gap-1.5" onClick={onAddProvider}>
-          <Plus className="h-3.5 w-3.5" />
-          {t('settings.addProviderButton')}
-        </Button>
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={onAddProvider}>
+            <Plus className="h-3.5 w-3.5" />
+            {t('settings.addProviderButton')}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            disabled={!selectedProvider}
+            onClick={() => {
+              if (selectedProvider) onDeleteProvider(selectedProvider.id);
+            }}
+          >
+            <Minus className="h-3.5 w-3.5" />
+            {t('settings.deleteProviderButton')}
+          </Button>
+        </div>
       </div>
     </div>
   );

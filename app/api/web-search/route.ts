@@ -17,6 +17,7 @@ import {
 } from '@/lib/server/search-query-builder';
 import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
 import type { AICallFn } from '@/lib/generation/pipeline-types';
+import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 
 const log = createLogger('WebSearch');
 
@@ -28,10 +29,12 @@ export async function POST(req: NextRequest) {
       query: requestQuery,
       pdfText,
       apiKey: clientApiKey,
+      baseUrl: clientBaseUrl,
     } = body as {
       query?: string;
       pdfText?: string;
       apiKey?: string;
+      baseUrl?: string;
     };
     query = requestQuery;
 
@@ -46,6 +49,13 @@ export async function POST(req: NextRequest) {
         400,
         'Tavily API key is not configured. Set it in Settings → Web Search or set TAVILY_API_KEY env var.',
       );
+    }
+
+    if (clientBaseUrl && process.env.NODE_ENV === 'production') {
+      const ssrfError = validateUrlForSSRF(clientBaseUrl);
+      if (ssrfError) {
+        return apiError('INVALID_URL', 403, ssrfError);
+      }
     }
 
     // Clamp rewrite input at the route boundary; framework body limits still apply to total request size.
@@ -81,7 +91,11 @@ export async function POST(req: NextRequest) {
       finalQueryLength: searchQuery.finalQueryLength,
     });
 
-    const result = await searchWithTavily({ query: searchQuery.query, apiKey });
+    const result = await searchWithTavily({
+      query: searchQuery.query,
+      apiKey,
+      baseUrl: clientBaseUrl,
+    });
     const context = formatSearchResultsAsContext(result);
 
     return apiSuccess({

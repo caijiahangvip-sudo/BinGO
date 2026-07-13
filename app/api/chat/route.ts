@@ -16,13 +16,97 @@ import { NextRequest } from 'next/server';
 import { statelessGenerate } from '@/lib/orchestration/stateless-generate';
 import type { StatelessChatRequest, StatelessEvent } from '@/lib/types/chat';
 import type { ThinkingConfig } from '@/lib/types/provider';
+import { OPENAI_REASONING_EFFORT_XHIGH } from '@/lib/ai/openai-routing';
 import { apiError } from '@/lib/server/api-response';
 import { createLogger } from '@/lib/logger';
 import { resolveModel } from '@/lib/server/resolve-model';
+import { buildChineseXinhuaPromptContext } from '@/lib/server/chinese-xinhua';
+import {
+  DEFAULT_RAG_STUDENT_ID,
+  buildLongTermMemoryContext,
+  searchStudentEvidenceEmbeddings,
+} from '@/lib/server/vector-store';
+import {
+  containsImagePayload,
+  estimateTokensFromText,
+  estimateTokensFromUnknown,
+  recordLlmTelemetry,
+  type LlmTelemetryStatus,
+} from '@/lib/telemetry';
 const log = createLogger('Chat API');
 
 // Allow streaming responses up to 60 seconds
 export const maxDuration = 60;
+const CHAT_RAG_TIMEOUT_MS = 5_000;
+
+async function withChatTimeout<T>(
+  operation: string,
+  timeoutMs: number,
+  promise: Promise<T>,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${operation} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function extractLatestUserText(body: StatelessChatRequest): string {
+  return (
+    body.messages
+      .slice()
+      .reverse()
+      .find((message) => message.role === 'user')
+      ?.parts?.map((part) => ('text' in part && typeof part.text === 'string' ? part.text : ''))
+      .join('\n') || ''
+  );
+}
+
+function buildRagQuery(body: StatelessChatRequest, latestUserText: string): string {
+  return [
+    body.config.discussionTopic,
+    body.config.debateConfig?.topic,
+    body.config.studentQuestion,
+    latestUserText,
+    body.storeState.stage?.name,
+    body.storeState.stage?.description,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+async function resolveLongTermMemoryContext(
+  body: StatelessChatRequest,
+  latestUserText: string,
+): Promise<string> {
+  const query = buildRagQuery(body, latestUserText).trim();
+  if (!query) return '';
+
+  try {
+    const matches = await withChatTimeout(
+      'Long-term memory retrieval',
+      CHAT_RAG_TIMEOUT_MS,
+      searchStudentEvidenceEmbeddings({
+        studentId: DEFAULT_RAG_STUDENT_ID,
+        query,
+        topK: 3,
+      }),
+    );
+    return buildLongTermMemoryContext(matches);
+  } catch (error) {
+    log.warn('Long-term memory retrieval failed; continuing without RAG context:', error);
+    return '';
+  }
+}
 
 /**
  * POST /api/chat
@@ -42,12 +126,43 @@ export const maxDuration = 60;
  */
 export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
+  const requestStartedAt = Date.now();
   let chatModel: string | undefined;
+  let chatProviderType: string | undefined;
   let chatMessageCount: number | undefined;
+  let inputTokensForTelemetry = 0;
+  let outputTextForTelemetry = '';
+  let outputActionTextForTelemetry = '';
+  let telemetryTags: string[] = [];
+  let telemetryRecorded = false;
+
+  const finalizeLlmTelemetry = (status: LlmTelemetryStatus, error?: unknown) => {
+    if (telemetryRecorded) return;
+    telemetryRecorded = true;
+
+    const outputTokens =
+      estimateTokensFromText(outputTextForTelemetry) +
+      estimateTokensFromText(outputActionTextForTelemetry);
+
+    recordLlmTelemetry({
+      route: '/api/chat',
+      model: chatModel,
+      providerType: chatProviderType,
+      latencyMs: Date.now() - requestStartedAt,
+      inputTokens: inputTokensForTelemetry,
+      outputTokens,
+      totalTokens: inputTokensForTelemetry + outputTokens,
+      messageCount: chatMessageCount,
+      tags: telemetryTags,
+      status,
+      error: error instanceof Error ? error.message : error ? String(error) : undefined,
+    });
+  };
 
   try {
     const body: StatelessChatRequest = await req.json();
     chatModel = body.model;
+    chatProviderType = body.providerType;
     chatMessageCount = body.messages?.length;
 
     // Validate required fields
@@ -82,6 +197,38 @@ export async function POST(req: NextRequest) {
 
     // Use the native request signal for abort propagation
     const signal = req.signal;
+    const latestUserText = extractLatestUserText(body);
+    const stageLanguage = body.storeState.stage?.language;
+    const dictionaryContext = await buildChineseXinhuaPromptContext({
+      text: [
+        latestUserText,
+        body.config.studentQuestion,
+        body.config.discussionTopic,
+        body.storeState.stage?.name,
+        body.storeState.stage?.description,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      language: stageLanguage,
+      limit: 8,
+    });
+    const longTermMemoryContext = await resolveLongTermMemoryContext(body, latestUserText);
+
+    telemetryTags = [
+      containsImagePayload(body.messages) ? 'vision-teach-back' : undefined,
+      body.config.sessionType ? `session:${body.config.sessionType}` : undefined,
+      body.config.discussionMode === 'debate' ? 'debate-flow' : undefined,
+      longTermMemoryContext ? 'learning-memory-rag' : undefined,
+    ].filter((tag): tag is string => Boolean(tag));
+    inputTokensForTelemetry = estimateTokensFromUnknown({
+      messages: body.messages,
+      storeState: body.storeState,
+      config: body.config,
+      directorState: body.directorState,
+      userProfile: body.userProfile,
+      dictionaryContext,
+      longTermMemoryContext,
+    });
 
     // Create SSE stream
     const { readable, writable } = new TransformStream();
@@ -117,16 +264,33 @@ export async function POST(req: NextRequest) {
           {
             ...body,
             apiKey: resolvedApiKey,
+            dictionaryContext,
+            longTermMemoryContext,
           },
           signal,
           languageModel,
-          { enabled: false } satisfies ThinkingConfig,
+          {
+            enabled: true,
+            effort: OPENAI_REASONING_EFFORT_XHIGH,
+          } satisfies ThinkingConfig,
         );
+
+        let streamStatus: LlmTelemetryStatus = 'success';
 
         for await (const event of generator) {
           if (signal.aborted) {
             log.info('Request was aborted');
+            streamStatus = 'aborted';
             break;
+          }
+
+          if (event.type === 'text_delta') {
+            outputTextForTelemetry += event.data.content;
+          } else if (event.type === 'action') {
+            outputActionTextForTelemetry += JSON.stringify({
+              actionName: event.data.actionName,
+              params: event.data.params,
+            });
           }
 
           const data = `data: ${JSON.stringify(event)}\n\n`;
@@ -134,6 +298,7 @@ export async function POST(req: NextRequest) {
         }
 
         stopHeartbeat();
+        finalizeLlmTelemetry(streamStatus);
         await writer.close();
       } catch (error) {
         stopHeartbeat();
@@ -141,6 +306,7 @@ export async function POST(req: NextRequest) {
         // If aborted, just close the writer silently
         if (signal.aborted) {
           log.info('Request aborted during streaming');
+          finalizeLlmTelemetry('aborted', error);
           try {
             await writer.close();
           } catch {
@@ -149,6 +315,7 @@ export async function POST(req: NextRequest) {
           return;
         }
 
+        finalizeLlmTelemetry('error', error);
         log.error(
           `Chat stream error [model=${body.model ?? 'unknown'}, agents=${body.config?.agentIds?.length ?? 0}, messages=${body.messages?.length ?? 0}]:`,
           error,

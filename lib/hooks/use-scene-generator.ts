@@ -2,19 +2,20 @@
 
 import { useCallback, useRef } from 'react';
 import { useStageStore } from '@/lib/store/stage';
-import { getCurrentModelConfig } from '@/lib/utils/model-config';
+import { getModelApiHeaders } from '@/lib/utils/model-config';
 import { useSettingsStore } from '@/lib/store/settings';
 import { db } from '@/lib/utils/database';
 import type { SceneOutline, PdfImage, ImageMapping } from '@/lib/types/generation';
 import type { AgentInfo } from '@/lib/generation/generation-pipeline';
+import type { ColorThemeId } from '@/lib/theme/color-themes';
 import type { Scene } from '@/lib/types/stage';
-import type { Action, SpeechAction } from '@/lib/types/action';
-import type { TTSProviderId } from '@/lib/audio/types';
+import type { SpeechAction } from '@/lib/types/action';
 import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
-import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
+import { createAudioBlob, normalizeAudioFormat } from '@/lib/audio/mime';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SceneGenerator');
+const TTS_RETRY_DELAY_MS = 1500;
 
 interface SceneContentResult {
   success: boolean;
@@ -31,32 +32,71 @@ interface SceneActionsResult {
 }
 
 function getApiHeaders(): HeadersInit {
-  const config = getCurrentModelConfig();
+  return getModelApiHeaders();
+}
+
+function waitForRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(resolve, ms);
+    const abort = () => {
+      window.clearTimeout(timeout);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
+function shouldFailSceneOnTTSFailure(providerId: string): boolean {
+  return providerId === 'cosyvoice-tts';
+}
+
+function getTTSRuntime() {
   const settings = useSettingsStore.getState();
-  const imageProviderConfig = settings.imageProvidersConfig?.[settings.imageProviderId];
-  const videoProviderConfig = settings.videoProvidersConfig?.[settings.videoProviderId];
+  const providerId = settings.ttsProviderId;
+  const providerConfig = settings.ttsProvidersConfig?.[providerId];
+  const compatibleProviderId = providerConfig?.compatibleProviderId || providerId;
 
   return {
-    'Content-Type': 'application/json',
-    'x-model': config.modelString || '',
-    'x-api-key': config.apiKey || '',
-    'x-base-url': config.baseUrl || '',
-    'x-provider-type': config.providerType || '',
-    'x-requires-api-key': String(config.requiresApiKey ?? false),
-    // Image generation provider
-    'x-image-provider': settings.imageProviderId || '',
-    'x-image-model': settings.imageModelId || '',
-    'x-image-api-key': imageProviderConfig?.apiKey || '',
-    'x-image-base-url': imageProviderConfig?.baseUrl || '',
-    // Video generation provider
-    'x-video-provider': settings.videoProviderId || '',
-    'x-video-model': settings.videoModelId || '',
-    'x-video-api-key': videoProviderConfig?.apiKey || '',
-    'x-video-base-url': videoProviderConfig?.baseUrl || '',
-    // Media generation toggles
-    'x-image-generation-enabled': String(settings.imageGenerationEnabled ?? false),
-    'x-video-generation-enabled': String(settings.videoGenerationEnabled ?? false),
+    enabled: settings.ttsEnabled && compatibleProviderId !== 'browser-native-tts',
+    providerId,
+    compatibleProviderId,
   };
+}
+
+export function prepareSceneSpeechForTTS(scene: Scene): Scene {
+  const runtime = getTTSRuntime();
+  if (!runtime.enabled) return scene;
+
+  const actions = splitLongSpeechActions(scene.actions || [], runtime.compatibleProviderId);
+  let changed = actions !== scene.actions;
+  const preparedActions = actions.map((action) => {
+    if (action.type !== 'speech' || !action.text) return action;
+
+    const audioId = action.audioId || `tts_${action.id}`;
+    if (action.audioId === audioId) return action;
+
+    changed = true;
+    return {
+      ...action,
+      audioId,
+    };
+  });
+
+  return changed ? { ...scene, actions: preparedActions } : scene;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+export function shouldAbortSceneGeneration(
+  isGenerating: boolean,
+  fetchAbortController: AbortController | null,
+): boolean {
+  return isGenerating || fetchAbortController !== null;
 }
 
 /** Call POST /api/generate/scene-content (step 1) */
@@ -72,8 +112,12 @@ async function fetchSceneContent(
       description?: string;
       language?: string;
       style?: string;
+      visualTheme?: ColorThemeId;
     };
     agents?: AgentInfo[];
+    forceClassroomScenes?: boolean;
+    visualTheme?: ColorThemeId;
+    slideLayoutReviewEnabled?: boolean;
   },
   signal?: AbortSignal,
 ): Promise<SceneContentResult> {
@@ -102,6 +146,7 @@ async function fetchSceneActions(
     agents?: AgentInfo[];
     previousSpeeches?: string[];
     userProfile?: string;
+    visualTheme?: ColorThemeId;
   },
   signal?: AbortSignal,
 ): Promise<SceneActionsResult> {
@@ -127,9 +172,10 @@ export async function generateAndStoreTTS(
   signal?: AbortSignal,
 ): Promise<void> {
   const settings = useSettingsStore.getState();
-  if (settings.ttsProviderId === 'browser-native-tts') return;
-
   const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
+  const ttsCompatibleProviderId = ttsProviderConfig?.compatibleProviderId || settings.ttsProviderId;
+  if (ttsCompatibleProviderId === 'browser-native-tts') return;
+
   const response = await fetch('/api/generate/tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -137,11 +183,13 @@ export async function generateAndStoreTTS(
       text,
       audioId,
       ttsProviderId: settings.ttsProviderId,
+      ttsCompatibleProviderId,
       ttsModelId: ttsProviderConfig?.modelId,
       ttsVoice: settings.ttsVoice,
       ttsSpeed: settings.ttsSpeed,
       ttsApiKey: ttsProviderConfig?.apiKey || undefined,
       ttsBaseUrl: ttsProviderConfig?.baseUrl || undefined,
+      ttsProviderOptions: ttsProviderConfig?.providerOptions,
     }),
     signal,
   });
@@ -162,11 +210,12 @@ export async function generateAndStoreTTS(
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
-  const blob = new Blob([bytes], { type: `audio/${data.format}` });
+  const format = normalizeAudioFormat(data.format);
+  const blob = createAudioBlob(bytes, format);
   await db.audioFiles.put({
     id: audioId,
     blob,
-    format: data.format,
+    format,
     createdAt: Date.now(),
   });
 }
@@ -176,30 +225,70 @@ async function generateTTSForScene(
   scene: Scene,
   signal?: AbortSignal,
 ): Promise<{ success: boolean; failedCount: number; error?: string }> {
-  const providerId = useSettingsStore.getState().ttsProviderId;
-  scene.actions = splitLongSpeechActions(scene.actions || [], providerId);
-  const speechActions = scene.actions.filter(
+  const { enabled, providerId, compatibleProviderId } = getTTSRuntime();
+  if (!enabled) return { success: true, failedCount: 0 };
+
+  const speechActions = (scene.actions || []).filter(
     (a): a is SpeechAction => a.type === 'speech' && !!a.text,
   );
   if (speechActions.length === 0) return { success: true, failedCount: 0 };
 
   let failedCount = 0;
   let lastError: string | undefined;
+  const maxAttempts = shouldFailSceneOnTTSFailure(compatibleProviderId) ? 1 : 2;
 
   for (const action of speechActions) {
-    const audioId = `tts_${action.id}`;
+    const audioId = action.audioId || `tts_${action.id}`;
     action.audioId = audioId;
-    try {
-      await generateAndStoreTTS(audioId, action.text, signal);
-    } catch (error) {
+    let generated = false;
+    let actionError: string | undefined;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await generateAndStoreTTS(audioId, action.text, signal);
+        generated = true;
+        if (attempt > 1) {
+          log.info('TTS retry succeeded:', {
+            providerId,
+            actionId: action.id,
+            attempt,
+          });
+        }
+        break;
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        actionError = error instanceof Error ? error.message : `TTS failed for action ${action.id}`;
+
+        if (attempt < maxAttempts) {
+          log.warn('TTS generation failed, retrying once:', {
+            providerId,
+            actionId: action.id,
+            textLength: action.text.length,
+            error: actionError,
+          });
+          await waitForRetry(TTS_RETRY_DELAY_MS, signal);
+          continue;
+        }
+
+        log.warn('TTS generation failed after retry:', {
+          providerId,
+          actionId: action.id,
+          textLength: action.text.length,
+          error: actionError,
+        });
+      }
+    }
+
+    if (!generated) {
       failedCount++;
-      lastError = error instanceof Error ? error.message : `TTS failed for action ${action.id}`;
-      log.warn('TTS generation failed:', {
-        providerId,
-        actionId: action.id,
-        textLength: action.text.length,
-        error: lastError,
-      });
+      lastError = actionError || `TTS failed for action ${action.id}`;
+      if (shouldFailSceneOnTTSFailure(compatibleProviderId)) {
+        return {
+          success: false,
+          failedCount,
+          error: lastError,
+        };
+      }
     }
   }
 
@@ -208,6 +297,31 @@ async function generateTTSForScene(
     failedCount,
     error: lastError,
   };
+}
+
+function startBackgroundTTS(scene: Scene, outline: SceneOutline, signal?: AbortSignal): void {
+  if (!getTTSRuntime().enabled) return;
+
+  void generateTTSForScene(scene, signal)
+    .then((ttsResult) => {
+      if (ttsResult.success) return;
+
+      log.warn('Background TTS generation failed for scene; scene remains usable:', {
+        outlineId: outline.id,
+        title: outline.title,
+        failedCount: ttsResult.failedCount,
+        error: ttsResult.error,
+      });
+    })
+    .catch((error) => {
+      if (isAbortError(error) || signal?.aborted) return;
+
+      log.warn('Background TTS generation crashed for scene; scene remains usable:', {
+        outlineId: outline.id,
+        title: outline.title,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
 }
 
 export interface UseSceneGeneratorOptions {
@@ -225,18 +339,21 @@ export interface GenerationParams {
     description?: string;
     language?: string;
     style?: string;
+    visualTheme?: ColorThemeId;
   };
   agents?: AgentInfo[];
   userProfile?: string;
+  forceClassroomScenes?: boolean;
+  slideLayoutReviewEnabled?: boolean;
 }
 
 export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
   const abortRef = useRef(false);
   const generatingRef = useRef(false);
-  const mediaAbortRef = useRef<AbortController | null>(null);
   const fetchAbortRef = useRef<AbortController | null>(null);
   const lastParamsRef = useRef<GenerationParams | null>(null);
-  const generateRemainingRef = useRef<((params: GenerationParams) => Promise<void>) | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   const store = useStageStore;
 
@@ -246,11 +363,6 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
       if (generatingRef.current) return;
       generatingRef.current = true;
       abortRef.current = false;
-      const removeGeneratingOutline = (outlineId: string) => {
-        const current = store.getState().generatingOutlines;
-        if (!current.some((o) => o.id === outlineId)) return;
-        store.getState().setGeneratingOutlines(current.filter((o) => o.id !== outlineId));
-      };
 
       // Create a new AbortController for this generation run
       fetchAbortRef.current = new AbortController();
@@ -261,32 +373,45 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
       const startEpoch = state.generationEpoch;
       if (!stage || outlines.length === 0) {
         generatingRef.current = false;
+        fetchAbortRef.current = null;
         return;
       }
+
+      const failOutline = (outline: SceneOutline, error: string) => {
+        store.getState().addFailedOutline(outline);
+        optionsRef.current.onSceneFailed?.(outline, error);
+      };
 
       store.getState().setGenerationStatus('generating');
 
       // Determine pending outlines
       const completedOrders = new Set(scenes.map((s) => s.order));
       const pending = outlines
+        .filter(
+          (o) =>
+            !completedOrders.has(o.order) &&
+            !state.failedOutlines.some((failed) => failed.id === o.id),
+        )
+        .sort((a, b) => a.order - b.order);
+      const unfinished = outlines
         .filter((o) => !completedOrders.has(o.order))
         .sort((a, b) => a.order - b.order);
 
       if (pending.length === 0) {
-        store.getState().setGenerationStatus('completed');
-        store.getState().setGeneratingOutlines([]);
-        options.onComplete?.();
+        store.getState().setCurrentGeneratingOrder(-1);
+        store.getState().setGeneratingOutlines(unfinished);
+        if (unfinished.length === 0) {
+          store.getState().setGenerationStatus('completed');
+          optionsRef.current.onComplete?.();
+        } else {
+          store.getState().setGenerationStatus('completed');
+        }
         generatingRef.current = false;
+        fetchAbortRef.current = null;
         return;
       }
 
-      store.getState().setGeneratingOutlines(pending);
-
-      // Launch media generation in parallel — does not block content/action generation
-      mediaAbortRef.current = new AbortController();
-      generateMediaForOutlines(outlines, stage.id, mediaAbortRef.current.signal).catch((err) => {
-        log.warn('Media generation error:', err);
-      });
+      store.getState().setGeneratingOutlines(unfinished);
 
       // Get previousSpeeches from last completed scene
       let previousSpeeches: string[] = [];
@@ -300,136 +425,158 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
 
       // Serial generation loop — two-step per outline
       try {
-        let pausedByFailureOrAbort = false;
+        let pausedByAbort = false;
         for (const outline of pending) {
           if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
             store.getState().setGenerationStatus('paused');
-            pausedByFailureOrAbort = true;
+            pausedByAbort = true;
             break;
+          }
+
+          const currentState = store.getState();
+          if (
+            currentState.scenes.some((scene) => scene.order === outline.order) ||
+            currentState.failedOutlines.some((failed) => failed.id === outline.id)
+          ) {
+            continue;
           }
 
           store.getState().setCurrentGeneratingOrder(outline.order);
 
-          // Step 1: Generate content
-          options.onPhaseChange?.('content', outline);
-          const contentResult = await fetchSceneContent(
-            {
-              outline,
-              allOutlines: outlines,
-              stageId: stage.id,
-              pdfImages: params.pdfImages,
-              imageMapping: params.imageMapping,
-              stageInfo: params.stageInfo,
-              agents: params.agents,
-            },
-            signal,
-          );
+          try {
+            // Step 1: Generate content
+            optionsRef.current.onPhaseChange?.('content', outline);
+            const contentResult = await fetchSceneContent(
+              {
+                outline,
+                allOutlines: outlines,
+                stageId: stage.id,
+                pdfImages: params.pdfImages,
+                imageMapping: params.imageMapping,
+                stageInfo: params.stageInfo,
+                agents: params.agents,
+                forceClassroomScenes: params.forceClassroomScenes,
+                visualTheme: params.stageInfo.visualTheme,
+                slideLayoutReviewEnabled: params.slideLayoutReviewEnabled,
+              },
+              signal,
+            );
 
-          if (!contentResult.success || !contentResult.content) {
-            if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
-              pausedByFailureOrAbort = true;
-              break;
-            }
-            store.getState().addFailedOutline(outline);
-            options.onSceneFailed?.(outline, contentResult.error || 'Content generation failed');
-            store.getState().setGenerationStatus('paused');
-            pausedByFailureOrAbort = true;
-            break;
-          }
-
-          if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
-            store.getState().setGenerationStatus('paused');
-            pausedByFailureOrAbort = true;
-            break;
-          }
-
-          // Step 2: Generate actions + assemble scene
-          options.onPhaseChange?.('actions', outline);
-          const actionsResult = await fetchSceneActions(
-            {
-              outline: contentResult.effectiveOutline || outline,
-              allOutlines: outlines,
-              content: contentResult.content,
-              stageId: stage.id,
-              agents: params.agents,
-              previousSpeeches,
-              userProfile: params.userProfile,
-            },
-            signal,
-          );
-
-          if (actionsResult.success && actionsResult.scene) {
-            const scene = actionsResult.scene;
-            const settings = useSettingsStore.getState();
-
-            // TTS generation — failure means the whole scene fails
-            if (settings.ttsEnabled && settings.ttsProviderId !== 'browser-native-tts') {
-              const ttsResult = await generateTTSForScene(scene, signal);
-              if (!ttsResult.success) {
-                if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
-                  pausedByFailureOrAbort = true;
-                  break;
-                }
-                store.getState().addFailedOutline(outline);
-                options.onSceneFailed?.(outline, ttsResult.error || 'TTS generation failed');
-                store.getState().setGenerationStatus('paused');
-                pausedByFailureOrAbort = true;
+            if (!contentResult.success || !contentResult.content) {
+              if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
+                pausedByAbort = true;
                 break;
               }
+              failOutline(outline, contentResult.error || 'Content generation failed');
+              continue;
             }
 
-            // Epoch changed — stage switched, discard this scene
-            if (store.getState().generationEpoch !== startEpoch) {
-              pausedByFailureOrAbort = true;
-              break;
-            }
-
-            removeGeneratingOutline(outline.id);
-            store.getState().addScene(scene);
-            options.onSceneGenerated?.(scene, outline.order);
-            previousSpeeches = actionsResult.previousSpeeches || [];
-          } else {
             if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
-              pausedByFailureOrAbort = true;
+              store.getState().setGenerationStatus('paused');
+              pausedByAbort = true;
               break;
             }
-            store.getState().addFailedOutline(outline);
-            options.onSceneFailed?.(outline, actionsResult.error || 'Actions generation failed');
-            store.getState().setGenerationStatus('paused');
-            pausedByFailureOrAbort = true;
-            break;
+
+            // Step 2: Generate actions + assemble scene
+            optionsRef.current.onPhaseChange?.('actions', outline);
+            const actionsResult = await fetchSceneActions(
+              {
+                outline: contentResult.effectiveOutline || outline,
+                allOutlines: outlines,
+                content: contentResult.content,
+                stageId: stage.id,
+                agents: params.agents,
+                previousSpeeches,
+                userProfile: params.userProfile,
+                visualTheme: params.stageInfo.visualTheme,
+              },
+              signal,
+            );
+
+            if (!actionsResult.success || !actionsResult.scene) {
+              if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
+                pausedByAbort = true;
+                break;
+              }
+              failOutline(outline, actionsResult.error || 'Actions generation failed');
+              continue;
+            }
+
+            if (store.getState().generationEpoch !== startEpoch) {
+              pausedByAbort = true;
+              break;
+            }
+
+            const scene = prepareSceneSpeechForTTS(actionsResult.scene);
+            store.getState().addScene(scene);
+            optionsRef.current.onSceneGenerated?.(scene, outline.order);
+            startBackgroundTTS(scene, outline, signal);
+            previousSpeeches = actionsResult.previousSpeeches || [];
+          } catch (err: unknown) {
+            if (
+              isAbortError(err) ||
+              abortRef.current ||
+              store.getState().generationEpoch !== startEpoch
+            ) {
+              log.info('Generation aborted');
+              store.getState().setGenerationStatus('paused');
+              pausedByAbort = true;
+              break;
+            }
+
+            failOutline(outline, err instanceof Error ? err.message : 'Scene generation failed');
+            continue;
           }
         }
 
-        if (!abortRef.current && !pausedByFailureOrAbort) {
+        if (
+          !abortRef.current &&
+          !pausedByAbort &&
+          store.getState().generationEpoch === startEpoch
+        ) {
+          const finalState = store.getState();
+          const completedAfter = new Set(finalState.scenes.map((scene) => scene.order));
+          const unfinishedAfter = outlines
+            .filter((outline) => !completedAfter.has(outline.order))
+            .sort((a, b) => a.order - b.order);
+
+          store.getState().setCurrentGeneratingOrder(-1);
+          store.getState().setGeneratingOutlines(unfinishedAfter);
           store.getState().setGenerationStatus('completed');
-          store.getState().setGeneratingOutlines([]);
-          options.onComplete?.();
+          if (unfinishedAfter.length === 0) {
+            optionsRef.current.onComplete?.();
+          }
         }
       } catch (err: unknown) {
         // AbortError is expected when stop() is called — don't treat as failure
-        if (err instanceof DOMException && err.name === 'AbortError') {
+        if (isAbortError(err)) {
           log.info('Generation aborted');
           store.getState().setGenerationStatus('paused');
         } else {
-          throw err;
+          log.error('Background generation crashed:', err);
+          store.getState().setGenerationStatus('paused');
         }
       } finally {
         generatingRef.current = false;
         fetchAbortRef.current = null;
       }
     },
-    [options, store],
+    [store],
   );
 
-  // Keep ref in sync so retrySingleOutline can call it
-  generateRemainingRef.current = generateRemaining;
+  const generateNextAfterScene = useCallback(
+    async (_currentScene: Scene, params: GenerationParams) => {
+      await generateRemaining(params);
+    },
+    [generateRemaining],
+  );
 
   const stop = useCallback(() => {
+    if (!shouldAbortSceneGeneration(generatingRef.current, fetchAbortRef.current)) return;
+
     abortRef.current = true;
     store.getState().bumpGenerationEpoch();
     fetchAbortRef.current?.abort();
-    mediaAbortRef.current?.abort();
   }, [store]);
 
   const isGenerating = useCallback(() => generatingRef.current, []);
@@ -451,6 +598,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
       // Remove from failed list and mark as generating
       store.getState().retryFailedOutline(outlineId);
       store.getState().setGenerationStatus('generating');
+      store.getState().setCurrentGeneratingOrder(outline.order);
       const currentGenerating = store.getState().generatingOutlines;
       if (!currentGenerating.some((o) => o.id === outline.id)) {
         store.getState().setGeneratingOutlines([...currentGenerating, outline]);
@@ -470,12 +618,17 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             imageMapping: params.imageMapping,
             stageInfo: params.stageInfo,
             agents: params.agents,
+            forceClassroomScenes: params.forceClassroomScenes,
+            visualTheme: params.stageInfo.visualTheme,
+            slideLayoutReviewEnabled: params.slideLayoutReviewEnabled,
           },
           signal,
         );
 
         if (!contentResult.success || !contentResult.content) {
           store.getState().addFailedOutline(outline);
+          store.getState().setGenerationStatus('paused');
+          store.getState().setCurrentGeneratingOrder(-1);
           return;
         }
 
@@ -497,40 +650,45 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             agents: params.agents,
             previousSpeeches,
             userProfile: params.userProfile,
+            visualTheme: params.stageInfo.visualTheme,
           },
           signal,
         );
 
         if (!actionsResult.success || !actionsResult.scene) {
           store.getState().addFailedOutline(outline);
+          store.getState().setGenerationStatus('paused');
+          store.getState().setCurrentGeneratingOrder(-1);
           return;
         }
 
-        // Step 3: TTS
-        const settings = useSettingsStore.getState();
-        if (settings.ttsEnabled && settings.ttsProviderId !== 'browser-native-tts') {
-          const ttsResult = await generateTTSForScene(actionsResult.scene, signal);
-          if (!ttsResult.success) {
-            store.getState().addFailedOutline(outline);
-            return;
-          }
-        }
-
+        const scene = prepareSceneSpeechForTTS(actionsResult.scene);
         removeGeneratingOutline();
-        store.getState().addScene(actionsResult.scene);
+        store.getState().addScene(scene);
+        startBackgroundTTS(scene, outline, signal);
 
-        // Resume remaining generation if there are pending outlines
-        if (store.getState().generatingOutlines.length > 0 && lastParamsRef.current) {
-          generateRemainingRef.current?.(lastParamsRef.current);
+        const completedOrders = new Set(store.getState().scenes.map((scene) => scene.order));
+        const hasPending = store
+          .getState()
+          .outlines.some((pendingOutline) => !completedOrders.has(pendingOutline.order));
+        if (hasPending) {
+          store.getState().setGenerationStatus('idle');
+        } else {
+          store.getState().setGenerationStatus('completed');
+          store.getState().setGeneratingOutlines([]);
+          optionsRef.current.onComplete?.();
         }
+        store.getState().setCurrentGeneratingOrder(-1);
       } catch (err) {
+        store.getState().setCurrentGeneratingOrder(-1);
         if (!(err instanceof DOMException && err.name === 'AbortError')) {
           store.getState().addFailedOutline(outline);
+          store.getState().setGenerationStatus('paused');
         }
       }
     },
     [store],
   );
 
-  return { generateRemaining, retrySingleOutline, stop, isGenerating };
+  return { generateRemaining, generateNextAfterScene, retrySingleOutline, stop, isGenerating };
 }

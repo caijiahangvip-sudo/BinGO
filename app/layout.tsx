@@ -1,7 +1,4 @@
 import type { Metadata } from 'next';
-import localFont from 'next/font/local';
-import { GeistSans } from 'geist/font/sans';
-import { GeistMono } from 'geist/font/mono';
 import './globals.css';
 import 'animate.css';
 import 'katex/dist/katex.min.css';
@@ -9,15 +6,13 @@ import { ThemeProvider } from '@/lib/hooks/use-theme';
 import { I18nProvider } from '@/lib/hooks/use-i18n';
 import { Toaster } from '@/components/ui/sonner';
 import { ServerProvidersInit } from '@/components/server-providers-init';
-
-const inter = localFont({
-  src: '../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2',
-  variable: '--font-sans',
-  weight: '100 900',
-});
+import { LocalSeedBootstrap } from '@/components/local-seed-bootstrap';
+import { getEmbeddedAppFontCss } from '@/lib/constants/fonts';
+import { getThemeInitScript } from '@/lib/theme/theme-runtime';
+import { DesktopUpdater } from '@/components/desktop-updater';
 
 export const metadata: Metadata = {
-  title: 'OpenMAIC',
+  title: 'BinGo',
   description:
     'The open-source AI interactive classroom. Upload a PDF to instantly generate an immersive, multi-agent learning experience.',
 };
@@ -28,15 +23,18 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={inter.variable} suppressHydrationWarning>
-      <body
-        className={`${GeistSans.variable} ${GeistMono.variable} antialiased`}
-        suppressHydrationWarning
-      >
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: getThemeInitScript() }} />
+        <style dangerouslySetInnerHTML={{ __html: getEmbeddedAppFontCss() }} />
+      </head>
+      <body className="antialiased" suppressHydrationWarning>
         <ThemeProvider>
           <I18nProvider>
+            <LocalSeedBootstrap />
             <ServerProvidersInit />
             {children}
+            <DesktopUpdater />
             <Toaster position="top-center" />
           </I18nProvider>
         </ThemeProvider>

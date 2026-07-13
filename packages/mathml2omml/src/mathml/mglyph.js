@@ -3,7 +3,7 @@ export function mglyph(element, targetParent, previousSibling, nextSibling, ance
   if (element.attribs?.alt) {
     targetParent.children.push({
       type: 'text',
-      data: element.attribs.alt
-    })
+      data: element.attribs.alt,
+    });
   }
 }

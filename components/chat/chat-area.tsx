@@ -1,16 +1,22 @@
 'use client';
 
 import { useImperativeHandle, forwardRef, useRef, useCallback, useState, useMemo } from 'react';
-import type { SessionType } from '@/lib/types/chat';
+import type { DiscussionMode, SessionType } from '@/lib/types/chat';
 import type { LectureNoteEntry } from '@/lib/types/chat';
 import type { DiscussionRequest } from '@/components/roundtable';
-import type { Action, SpeechAction, DiscussionAction } from '@/lib/types/action';
+import type {
+  Action,
+  SpeechAction,
+  DiscussionAction,
+  WaitForUserTeachingAction,
+} from '@/lib/types/action';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useStageStore } from '@/lib/store';
 import { PanelRightClose, BookOpen, MessageSquare } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useChatSessions } from './use-chat-sessions';
+import type { SendMessageOptions } from './use-chat-sessions';
 import { SessionList } from './session-list';
 import { LectureNotesView } from './lecture-notes-view';
 
@@ -26,6 +32,7 @@ interface ChatAreaProps {
   onSpeechProgress?: (ratio: number | null) => void;
   onThinking?: (state: { stage: string; agentId?: string } | null) => void;
   onCueUser?: (fromAgentId?: string, prompt?: string) => void;
+  onWaitForUserTeaching?: (action: WaitForUserTeachingAction) => Promise<void> | void;
   onLiveSessionError?: () => void;
   onStopSession?: () => void;
   onSegmentSealed?: (
@@ -45,12 +52,13 @@ export interface ChatAreaRef {
   endActiveSession: () => Promise<void>;
   softPauseActiveSession: () => Promise<void>;
   resumeActiveSession: () => Promise<void>;
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, options?: SendMessageOptions) => Promise<void>;
   startDiscussion: (request: DiscussionRequest) => Promise<void>;
   startLecture: (sceneId: string) => Promise<string>;
   addLectureMessage: (sessionId: string, action: Action, actionIndex: number) => void;
   getIsStreaming: () => boolean;
   getActiveSessionType: () => string | null;
+  getActiveDiscussionMode: () => DiscussionMode | null;
   getLectureMessageId: (sessionId: string) => string | null;
   pauseBuffer: (sessionId: string) => void;
   resumeBuffer: (sessionId: string) => void;
@@ -77,6 +85,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       onSpeechProgress,
       onThinking,
       onCueUser,
+      onWaitForUserTeaching,
       onLiveSessionError,
       onStopSession,
       onSegmentSealed,
@@ -112,6 +121,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       onSpeechProgress,
       onThinking,
       onCueUser,
+      onWaitForUserTeaching,
       onActiveBubble,
       onLiveSessionError,
       onStopSession,
@@ -141,7 +151,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
                   a.type === 'spotlight' ||
                   a.type === 'laser' ||
                   a.type === 'play_video' ||
-                  a.type === 'discussion',
+                  a.type === 'discussion' ||
+                  a.type === 'wait_for_user_teaching',
               )
               .map((a) => {
                 if (a.type === 'speech') {
@@ -184,6 +195,14 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       setActiveTab(tab);
     }, []);
 
+    const getActiveDiscussionMode = useCallback((): DiscussionMode | null => {
+      const activeSession = sessions.find(
+        (session) => session.type === 'discussion' && session.status === 'active',
+      );
+
+      return activeSession?.config.discussionMode ?? null;
+    }, [sessions]);
+
     useImperativeHandle(ref, () => ({
       createSession,
       endSession,
@@ -196,6 +215,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       addLectureMessage,
       getIsStreaming: () => isStreaming,
       getActiveSessionType: () => activeSessionType,
+      getActiveDiscussionMode,
       getLectureMessageId,
       pauseBuffer,
       resumeBuffer,

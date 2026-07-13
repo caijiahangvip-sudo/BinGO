@@ -6,16 +6,22 @@ import {
   isBrowserTTSAbortError,
   playBrowserTTSPreview,
 } from '@/lib/audio/browser-tts-preview';
+import { createAudioBlob } from '@/lib/audio/mime';
 
 export interface TTSPreviewOptions {
   text: string;
   providerId: string;
+  compatibleProviderId?: string;
   modelId?: string;
   voice: string;
   speed: number;
   apiKey?: string;
   baseUrl?: string;
+  providerOptions?: Record<string, unknown>;
+  localServiceStartupTimeoutMs?: number;
 }
+
+const TTS_PREVIEW_REQUEST_TIMEOUT_MS = 11 * 60 * 1000;
 
 /**
  * Shared hook for TTS preview playback (browser-native and API-based).
@@ -67,7 +73,9 @@ export function useTTSPreview() {
 
       setPreviewing(true);
       try {
-        if (options.providerId === 'browser-native-tts') {
+        const runtimeProviderId = options.compatibleProviderId || options.providerId;
+
+        if (runtimeProviderId === 'browser-native-tts') {
           if (typeof window === 'undefined' || !window.speechSynthesis) {
             throw new Error('Browser does not support Speech Synthesis API');
           }
@@ -96,18 +104,31 @@ export function useTTSPreview() {
           text: options.text,
           audioId: 'preview',
           ttsProviderId: options.providerId,
+          ttsCompatibleProviderId: runtimeProviderId,
           ttsModelId: options.modelId,
           ttsVoice: options.voice,
           ttsSpeed: options.speed,
+          ttsProviderOptions: options.providerOptions,
+          localServiceStartupTimeoutMs: options.localServiceStartupTimeoutMs,
         };
         if (options.apiKey?.trim()) body.ttsApiKey = options.apiKey;
         if (options.baseUrl?.trim()) body.ttsBaseUrl = options.baseUrl;
 
-        const res = await fetch('/api/generate/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), TTS_PREVIEW_REQUEST_TIMEOUT_MS);
+        cancelRef.current = () => controller.abort();
+        let res: Response;
+        try {
+          res = await fetch('/api/generate/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+        } finally {
+          window.clearTimeout(timeout);
+          cancelRef.current = null;
+        }
         if (isStale()) return;
 
         const data = await res.json().catch(() => ({ error: res.statusText }));
@@ -121,7 +142,10 @@ export function useTTSPreview() {
         const binaryStr = atob(data.base64);
         const bytes = new Uint8Array(binaryStr.length);
         for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-        const blob = new Blob([bytes], { type: `audio/${data.format || 'mp3'}` });
+        if (bytes.byteLength <= 44 && (data.format || '').toLowerCase() === 'wav') {
+          throw new Error('TTS preview returned empty WAV audio');
+        }
+        const blob = createAudioBlob(bytes, data.format || 'mp3');
 
         if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
         const url = URL.createObjectURL(blob);

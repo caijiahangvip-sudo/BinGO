@@ -1,13 +1,13 @@
-import { nodeResolve } from '@rollup/plugin-node-resolve'
+import { nodeResolve } from '@rollup/plugin-node-resolve';
 
 const onwarn = (warning) => {
   // Silence circular dependency warning for moment package
   if (warning.code === 'CIRCULAR_DEPENDENCY') {
-    return
+    return;
   }
 
-  console.warn(`(!) ${warning.message}`)
-}
+  console.warn(`(!) ${warning.message}`);
+};
 
 export default {
   input: 'src/index.js',
@@ -15,14 +15,14 @@ export default {
     {
       file: 'dist/index.js',
       format: 'module',
-      sourcemap: true
+      sourcemap: true,
     },
     {
       file: 'dist/index.cjs',
       format: 'commonjs',
-      sourcemap: true
-    }
+      sourcemap: true,
+    },
   ],
   plugins: [nodeResolve()],
-  onwarn
-}
+  onwarn,
+};

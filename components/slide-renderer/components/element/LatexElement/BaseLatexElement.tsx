@@ -1,7 +1,9 @@
 'use client';
 
-import { useRef, useState, useLayoutEffect } from 'react';
+import { useMemo, useRef, useState, useLayoutEffect } from 'react';
+import katex from 'katex';
 import type { PPTLatexElement } from '@/lib/types/slides';
+import { repairMathDisplayText, repairMathLatex } from '@/lib/utils/math-display-repair';
 
 export interface BaseLatexElementProps {
   elementInfo: PPTLatexElement;
@@ -12,6 +14,11 @@ export interface BaseLatexElementProps {
  * Renders KaTeX HTML if available, falls back to legacy SVG path.
  */
 export function BaseLatexElement({ elementInfo }: BaseLatexElementProps) {
+  const html = useMemo(
+    () => getRenderedLatexHtml(elementInfo.latex, elementInfo.html),
+    [elementInfo.html, elementInfo.latex],
+  );
+
   return (
     <div
       className="base-element-latex absolute"
@@ -27,9 +34,9 @@ export function BaseLatexElement({ elementInfo }: BaseLatexElementProps) {
         style={{ transform: `rotate(${elementInfo.rotate}deg)` }}
       >
         <div className="element-content relative w-full h-full">
-          {elementInfo.html ? (
+          {html ? (
             <KatexContent
-              html={elementInfo.html}
+              html={html}
               width={elementInfo.width}
               height={elementInfo.height}
               align={elementInfo.align}
@@ -66,6 +73,27 @@ const ALIGN_MAP = {
   center: 'center',
   right: 'flex-end',
 } as const;
+
+function getRenderedLatexHtml(latex: string, fallbackHtml?: string): string | undefined {
+  const repairedLatex = repairMathLatex(latex);
+  if (fallbackHtml && repairedLatex === latex) {
+    return repairMathDisplayText(fallbackHtml);
+  }
+
+  if (!repairedLatex) {
+    return fallbackHtml ? repairMathDisplayText(fallbackHtml) : undefined;
+  }
+
+  try {
+    return katex.renderToString(repairedLatex, {
+      throwOnError: false,
+      displayMode: true,
+      output: 'html',
+    });
+  } catch {
+    return fallbackHtml ? repairMathDisplayText(fallbackHtml) : undefined;
+  }
+}
 
 function KatexContent({
   html,

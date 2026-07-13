@@ -9,6 +9,7 @@
  * - Azure TTS: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/text-to-speech
  * - GLM TTS: https://docs.bigmodel.cn/cn/guide/models/sound-and-video/glm-tts
  * - Qwen TTS: https://bailian.console.aliyun.com/
+ * - CosyVoice: https://github.com/FunAudioLLM/CosyVoice
  * - MiniMax TTS: https://platform.minimaxi.com/docs/api-reference/speech-t2a-http
  * - Doubao TTS: https://www.volcengine.com/docs/6561/1257543
  * - ElevenLabs TTS: https://elevenlabs.io/docs/api-reference/text-to-speech/convert
@@ -92,8 +93,16 @@
  * - URL-based: For providers returning audio URL (download in second step)
  */
 
+import fs from 'fs';
+import path from 'path';
 import type { TTSModelConfig } from './types';
 import { TTS_PROVIDERS } from './constants';
+import {
+  COSYVOICE_DEFAULT_PROMPT_TEXT,
+  findCosyVoiceCloneVoice,
+  formatCosyVoicePromptText,
+} from './cosyvoice-clone';
+import { resolveEndpointUrl } from '@/lib/utils/api-url';
 
 /**
  * Result of TTS generation
@@ -118,6 +127,44 @@ export class TTSRateLimitError extends Error {
     super(message);
     this.name = 'TTSRateLimitError';
   }
+}
+
+const COSYVOICE_LOCAL_SAMPLE_RATE = 24000;
+const COSYVOICE_DEFAULT_PROMPT_WAV = path.join(
+  process.cwd(),
+  'dev',
+  'CosyVoice',
+  'asset',
+  'zero_shot_prompt.wav',
+);
+
+function createWavFromPcm16(pcm: Uint8Array, sampleRate: number): Uint8Array {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+  const writeString = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i += 1) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + pcm.byteLength, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, pcm.byteLength, true);
+
+  const wav = new Uint8Array(44 + pcm.byteLength);
+  wav.set(new Uint8Array(header), 0);
+  wav.set(pcm, 44);
+  return wav;
 }
 
 /**
@@ -150,6 +197,9 @@ export async function generateTTS(
     case 'qwen-tts':
       return await generateQwenTTS(config, text);
 
+    case 'cosyvoice-tts':
+      return await generateCosyVoiceTTS(config, text);
+
     case 'minimax-tts':
       return await generateMiniMaxTTS(config, text);
     case 'doubao-tts':
@@ -174,10 +224,14 @@ async function generateOpenAITTS(
   config: TTSModelConfig,
   text: string,
 ): Promise<TTSGenerationResult> {
-  const baseUrl = config.baseUrl || TTS_PROVIDERS['openai-tts'].defaultBaseUrl;
+  const endpointUrl = resolveEndpointUrl(
+    config.baseUrl,
+    TTS_PROVIDERS['openai-tts'].defaultBaseUrl,
+    '/audio/speech',
+  );
 
   // Use gpt-4o-mini-tts for best quality and intelligent realtime applications
-  const response = await fetch(`${baseUrl}/audio/speech`, {
+  const response = await fetch(endpointUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
@@ -247,9 +301,13 @@ async function generateAzureTTS(
  * GLM TTS implementation (GLM API)
  */
 async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTSGenerationResult> {
-  const baseUrl = config.baseUrl || TTS_PROVIDERS['glm-tts'].defaultBaseUrl;
+  const endpointUrl = resolveEndpointUrl(
+    config.baseUrl,
+    TTS_PROVIDERS['glm-tts'].defaultBaseUrl,
+    '/audio/speech',
+  );
 
-  const response = await fetch(`${baseUrl}/audio/speech`, {
+  const response = await fetch(endpointUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
@@ -340,6 +398,67 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   return {
     audio: new Uint8Array(arrayBuffer),
     format: 'wav', // Qwen3 TTS returns WAV format
+  };
+}
+
+async function generateCosyVoiceTTS(
+  config: TTSModelConfig,
+  text: string,
+): Promise<TTSGenerationResult> {
+  const baseUrl = (config.baseUrl || TTS_PROVIDERS['cosyvoice-tts'].defaultBaseUrl || '')
+    .trim()
+    .replace(/\/$/, '');
+  if (!baseUrl) {
+    throw new Error('CosyVoice local service URL is required');
+  }
+
+  const formData = new FormData();
+  formData.set('tts_text', text);
+  const cloneVoice = findCosyVoiceCloneVoice(config.providerOptions, config.voice);
+  const promptText = cloneVoice
+    ? formatCosyVoicePromptText(cloneVoice.promptText)
+    : COSYVOICE_DEFAULT_PROMPT_TEXT;
+  const promptAudioPath = cloneVoice?.promptAudioPath || COSYVOICE_DEFAULT_PROMPT_WAV;
+  formData.set('prompt_text', promptText);
+
+  const promptWav = await fs.promises.readFile(promptAudioPath).catch((error) => {
+    throw new Error(
+      `CosyVoice local prompt audio is missing at ${promptAudioPath}. ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
+  formData.set(
+    'prompt_wav',
+    new Blob([promptWav], { type: 'audio/wav' }),
+    `${config.voice || 'zero_shot_prompt'}${path.extname(promptAudioPath) || '.wav'}`,
+  );
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/inference_zero_shot`, {
+      method: 'POST',
+      body: formData,
+    });
+  } catch (error) {
+    throw new Error(
+      `CosyVoice local service is not reachable at ${baseUrl}. Start scripts/cosyvoice-local-server.ps1 first. ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if (!response.ok) {
+    const error = await response.text().catch(() => response.statusText);
+    throw new Error(`CosyVoice local TTS API error: ${error || response.statusText}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  if (arrayBuffer.byteLength === 0) {
+    throw new Error(
+      'CosyVoice local service returned empty audio. Try a longer test sentence or restart the local CosyVoice service.',
+    );
+  }
+
+  return {
+    audio: createWavFromPcm16(new Uint8Array(arrayBuffer), COSYVOICE_LOCAL_SAMPLE_RATE),
+    format: 'wav',
   };
 }
 
@@ -514,7 +633,7 @@ async function generateDoubaoTTS(
       'X-Api-Resource-Id': 'seed-tts-2.0',
     },
     body: JSON.stringify({
-      user: { uid: 'openmaic' },
+      user: { uid: 'bingo' },
       req_params: {
         text,
         speaker: config.voice,

@@ -7,6 +7,18 @@
 - **Key Points**:
   {{keyPoints}}
 
+## 生成约束 / Generation Constraints
+
+{{generationConstraints}}
+
+## 视觉主题 / Visual Theme
+
+{{visualTheme}}
+
+## 版式方案 / Layout Variant
+
+{{layoutVariant}}
+
 {{teacherContext}}
 
 ## Available Resources

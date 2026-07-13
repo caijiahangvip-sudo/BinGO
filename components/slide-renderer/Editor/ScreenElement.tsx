@@ -2,6 +2,10 @@
 
 import { ElementTypes, type PPTElement } from '@/lib/types/slides';
 import { useMemo } from 'react';
+import {
+  DEFAULT_SCREEN_FONT_NAME,
+  resolveScreenFontFamily,
+} from '@/lib/constants/fonts';
 
 import { BaseImageElement } from '../components/element/ImageElement/BaseImageElement';
 import { BaseTextElement } from '../components/element/TextElement/BaseTextElement';
@@ -45,7 +49,7 @@ export function ScreenElement({ elementInfo, elementIndex, animate }: ScreenElem
       }
       return {
         fontColor: '#333333',
-        fontName: 'Microsoft YaHei',
+        fontName: DEFAULT_SCREEN_FONT_NAME,
       };
     },
   );
@@ -61,7 +65,7 @@ export function ScreenElement({ elementInfo, elementIndex, animate }: ScreenElem
       style={{
         zIndex: elementIndex,
         color: theme.fontColor,
-        fontFamily: theme.fontName,
+        fontFamily: resolveScreenFontFamily(theme.fontName),
       }}
     >
       <CurrentElementComponent elementInfo={elementInfo} animate={animate} />

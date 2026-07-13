@@ -22,14 +22,11 @@ import { resolveModel } from '@/lib/server/resolve-model';
 import { buildSearchQuery } from '@/lib/server/search-query-builder';
 import { searchWithTavily, formatSearchResultsAsContext } from '@/lib/web-search/tavily';
 import { persistClassroom } from '@/lib/server/classroom-storage';
-import {
-  generateMediaForClassroom,
-  replaceMediaPlaceholders,
-  generateTTSForClassroom,
-} from '@/lib/server/classroom-media-generation';
+import { generateTTSForClassroom } from '@/lib/server/classroom-media-generation';
 import type { UserRequirements } from '@/lib/types/generation';
 import type { Scene, Stage } from '@/lib/types/stage';
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
+import { resolveColorThemeId, type ColorThemeId } from '@/lib/theme/color-themes';
 
 const log = createLogger('Classroom');
 
@@ -38,10 +35,10 @@ export interface GenerateClassroomInput {
   pdfContent?: { text: string; images: string[] };
   language?: string;
   enableWebSearch?: boolean;
-  enableImageGeneration?: boolean;
-  enableVideoGeneration?: boolean;
   enableTTS?: boolean;
   agentMode?: 'default' | 'generate';
+  visualTheme?: ColorThemeId;
+  slideLayoutReviewEnabled?: boolean;
 }
 
 export type ClassroomGenerationStep =
@@ -221,9 +218,11 @@ export async function generateClassroom(
   };
 
   const lang = normalizeLanguage(input.language);
+  const visualTheme = resolveColorThemeId(input.visualTheme);
   const requirements: UserRequirements = {
     requirement,
     language: lang,
+    visualTheme,
   };
   const pdfText = pdfContent?.text || undefined;
 
@@ -296,8 +295,6 @@ export async function generateClassroom(
     aiCall,
     undefined,
     {
-      imageGenerationEnabled: input.enableImageGeneration,
-      videoGenerationEnabled: input.enableVideoGeneration,
       researchContext,
       teacherContext,
     },
@@ -326,6 +323,7 @@ export async function generateClassroom(
     description: undefined,
     language: lang,
     style: 'interactive',
+    visualTheme,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     // Embed agent configs so API-generated classrooms can hydrate
@@ -366,8 +364,11 @@ export async function generateClassroom(
       undefined,
       undefined,
       undefined,
-      undefined,
       agents,
+      {
+        visualTheme,
+        slideLayoutReviewEnabled: input.slideLayoutReviewEnabled === true,
+      },
     );
     if (!content) {
       log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
@@ -377,7 +378,7 @@ export async function generateClassroom(
     const actions = await generateSceneActions(safeOutline, content, aiCall, undefined, agents);
     log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
 
-    const sceneId = createSceneWithActions(safeOutline, content, actions, api);
+    const sceneId = createSceneWithActions(safeOutline, content, actions, api, visualTheme);
     if (!sceneId) {
       log.warn(`Skipping scene "${safeOutline.title}" — scene creation failed`);
       continue;
@@ -399,25 +400,6 @@ export async function generateClassroom(
 
   if (scenes.length === 0) {
     throw new Error('No scenes were generated');
-  }
-
-  // Phase: Media generation (after all scenes generated)
-  if (input.enableImageGeneration || input.enableVideoGeneration) {
-    await options.onProgress?.({
-      step: 'generating_media',
-      progress: 90,
-      message: 'Generating media files',
-      scenesGenerated: scenes.length,
-      totalScenes: outlines.length,
-    });
-
-    try {
-      const mediaMap = await generateMediaForClassroom(outlines, stageId, options.baseUrl);
-      replaceMediaPlaceholders(scenes, mediaMap);
-      log.info(`Media generation complete: ${Object.keys(mediaMap).length} files`);
-    } catch (err) {
-      log.warn('Media generation phase failed, continuing:', err);
-    }
   }
 
   // Phase: TTS generation

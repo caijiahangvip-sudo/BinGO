@@ -5,7 +5,6 @@
  * are now spread across focused sub-modules.
  */
 
-// Types
 export type {
   AgentInfo,
   SceneGenerationContext,
@@ -36,6 +35,8 @@ export {
   generateFullScenes,
   generateSceneContent,
   generateSceneActions,
+  buildFallbackQuizContent,
+  buildFallbackInteractiveContent,
   createSceneWithActions,
 } from './scene-generator';
 
@@ -43,7 +44,6 @@ export {
 export {
   buildSceneFromOutline,
   buildCompleteScene,
-  uniquifyMediaElementIds,
 } from './scene-builder';
 
 // Pipeline runner

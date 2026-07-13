@@ -8,15 +8,15 @@ export function mspace(element, targetParent, previousSibling, nextSibling, ance
         name: 'm:t',
         type: 'tag',
         attribs: {
-          'xml:space': 'preserve'
+          'xml:space': 'preserve',
         },
         children: [
           {
             type: 'text',
-            data: ' '
-          }
-        ]
-      }
-    ]
-  })
+            data: ' ',
+          },
+        ],
+      },
+    ],
+  });
 }

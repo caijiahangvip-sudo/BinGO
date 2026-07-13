@@ -17,48 +17,13 @@ import type { LanguageModel } from 'ai';
 import type { Slide, SlideTheme } from '@/lib/types/slides';
 import type { Scene } from '@/lib/types/stage';
 import type { Action } from '@/lib/types/action';
+import type { ColorThemeId } from '@/lib/theme/color-themes';
 import { applyOutlineFallbacks } from './outline-generator';
 import { generateSceneContent, generateSceneActions } from './scene-generator';
 import type { AgentInfo, SceneGenerationContext, AICallFn } from './pipeline-types';
 import { createLogger } from '@/lib/logger';
+import { createSlideTheme } from '@/lib/theme/presentation-theme';
 const log = createLogger('Generation');
-
-/**
- * Replace sequential gen_img_N / gen_vid_N IDs in outlines with globally unique IDs.
- *
- * The LLM generates sequential placeholder IDs (gen_img_1, gen_img_2, ...) which are
- * only unique within a single course. Since the media store uses elementId as key
- * without stageId scoping, identical IDs across different courses cause thumbnail
- * contamination on the homepage. Using nanoid-based IDs ensures global uniqueness.
- */
-export function uniquifyMediaElementIds(outlines: SceneOutline[]): SceneOutline[] {
-  const idMap = new Map<string, string>();
-
-  // First pass: collect all sequential media IDs and assign unique replacements
-  for (const outline of outlines) {
-    if (!outline.mediaGenerations) continue;
-    for (const mg of outline.mediaGenerations) {
-      if (!idMap.has(mg.elementId)) {
-        const prefix = mg.type === 'video' ? 'gen_vid_' : 'gen_img_';
-        idMap.set(mg.elementId, `${prefix}${nanoid(8)}`);
-      }
-    }
-  }
-
-  if (idMap.size === 0) return outlines;
-
-  // Second pass: replace IDs in mediaGenerations
-  return outlines.map((outline) => {
-    if (!outline.mediaGenerations) return outline;
-    return {
-      ...outline,
-      mediaGenerations: outline.mediaGenerations.map((mg) => ({
-        ...mg,
-        elementId: idMap.get(mg.elementId) || mg.elementId,
-      })),
-    };
-  });
-}
 
 /**
  * Build a complete Scene object from an outline (for SSE streaming)
@@ -76,6 +41,8 @@ export async function buildSceneFromOutline(
   agents?: AgentInfo[],
   onPhaseChange?: (phase: 'content' | 'actions') => void,
   userProfile?: string,
+  visualTheme?: ColorThemeId,
+  slideLayoutReviewEnabled = false,
 ): Promise<Scene | null> {
   // Apply type fallbacks
   outline = applyOutlineFallbacks(outline, !!languageModel);
@@ -98,8 +65,8 @@ export async function buildSceneFromOutline(
     imageMapping,
     languageModel,
     visionEnabled,
-    undefined,
     agents,
+    { visualTheme, slideLayoutReviewEnabled },
   );
   if (!content) {
     log.error(`Failed to generate content for: ${outline.title}`);
@@ -113,7 +80,7 @@ export async function buildSceneFromOutline(
   log.debug(`Generated ${actions.length} actions for: ${outline.title}`);
 
   // Build complete Scene object
-  return buildCompleteScene(outline, content, actions, stageId);
+  return buildCompleteScene(outline, content, actions, stageId, visualTheme);
 }
 
 /**
@@ -128,19 +95,13 @@ export function buildCompleteScene(
     | GeneratedPBLContent,
   actions: Action[],
   stageId: string,
+  visualTheme?: ColorThemeId,
 ): Scene | null {
   const sceneId = nanoid();
 
   if (outline.type === 'slide' && 'elements' in content) {
     // Build Slide object
-    const defaultTheme: SlideTheme = {
-      backgroundColor: '#ffffff',
-      themeColors: ['#5b9bd5', '#ed7d31', '#a5a5a5', '#ffc000', '#4472c4'],
-      fontColor: '#333333',
-      fontName: 'Microsoft YaHei',
-      outline: { color: '#d14424', width: 2, style: 'solid' },
-      shadow: { h: 0, v: 0, blur: 10, color: '#000000' },
-    };
+    const defaultTheme: SlideTheme = createSlideTheme(visualTheme);
 
     const slide: Slide = {
       id: nanoid(),
@@ -162,6 +123,7 @@ export function buildCompleteScene(
         canvas: slide,
       },
       actions,
+      learningContext: outline.learningContext,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -179,6 +141,7 @@ export function buildCompleteScene(
         questions: content.questions,
       },
       actions,
+      learningContext: outline.learningContext,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -197,6 +160,7 @@ export function buildCompleteScene(
         html: content.html,
       },
       actions,
+      learningContext: outline.learningContext,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -214,6 +178,7 @@ export function buildCompleteScene(
         projectConfig: content.projectConfig,
       },
       actions,
+      learningContext: outline.learningContext,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };

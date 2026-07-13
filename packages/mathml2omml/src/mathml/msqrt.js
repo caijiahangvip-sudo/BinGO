@@ -3,8 +3,8 @@ export function msqrt(element, targetParent, previousSibling, nextSibling, ances
     name: 'm:e',
     type: 'tag',
     attribs: {},
-    children: []
-  }
+    children: [],
+  };
   targetParent.children.push({
     name: 'm:rad',
     type: 'tag',
@@ -19,20 +19,20 @@ export function msqrt(element, targetParent, previousSibling, nextSibling, ances
             name: 'm:degHide',
             type: 'tag',
             attribs: {
-              'm:val': 'on'
+              'm:val': 'on',
             },
-            children: []
-          }
-        ]
+            children: [],
+          },
+        ],
       },
       {
         name: 'm:deg',
         type: 'tag',
         attribs: {},
-        children: []
+        children: [],
       },
-      targetElement
-    ]
-  })
-  return targetElement
+      targetElement,
+    ],
+  });
+  return targetElement;
 }

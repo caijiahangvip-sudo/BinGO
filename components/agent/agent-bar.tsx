@@ -4,12 +4,14 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { resolveAgentVoice, getAvailableProvidersWithVoices } from '@/lib/audio/voice-resolver';
 import { playBrowserTTSPreview } from '@/lib/audio/browser-tts-preview';
+import { getAudioMimeType } from '@/lib/audio/mime';
 import {
   Sparkles,
   ChevronDown,
@@ -85,7 +87,10 @@ function AgentVoicePill({
         'zh-CN';
       const previewText = courseLanguage === 'en-US' ? 'Welcome to AI Classroom' : '欢迎来到AI课堂';
 
-      if (providerId === 'browser-native-tts') {
+      const providerConfig = ttsProvidersConfig[providerId];
+      const compatibleProviderId = providerConfig?.compatibleProviderId || providerId;
+
+      if (compatibleProviderId === 'browser-native-tts') {
         const { promise, cancel } = playBrowserTTSPreview({ text: previewText, voice: voiceId });
         previewCancelRef.current = cancel;
         try {
@@ -101,7 +106,6 @@ function AgentVoicePill({
       try {
         const controller = new AbortController();
         previewAbortRef.current = controller;
-        const providerConfig = ttsProvidersConfig[providerId];
         const res = await fetch('/api/generate/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -109,11 +113,13 @@ function AgentVoicePill({
             text: previewText,
             audioId: 'voice-preview',
             ttsProviderId: providerId,
+            ttsCompatibleProviderId: compatibleProviderId,
             ttsModelId: modelId || providerConfig?.modelId,
             ttsVoice: voiceId,
             ttsSpeed: 1,
             ttsApiKey: providerConfig?.apiKey,
             ttsBaseUrl: providerConfig?.serverBaseUrl || providerConfig?.baseUrl,
+            ttsProviderOptions: providerConfig?.providerOptions,
           }),
           signal: controller.signal,
         });
@@ -121,7 +127,9 @@ function AgentVoicePill({
         const data = await res.json();
         if (!data.base64) throw new Error('No audio');
 
-        const audio = new Audio(`data:audio/${data.format || 'mp3'};base64,${data.base64}`);
+        const audio = new Audio(
+          `data:${getAudioMimeType(data.format || 'mp3')};base64,${data.base64}`,
+        );
         previewAudioRef.current = audio;
         audio.addEventListener('ended', () => setPreviewingId(null));
         audio.addEventListener('error', () => setPreviewingId(null));
@@ -310,7 +318,10 @@ function TeacherVoicePill({
         'zh-CN';
       const previewText = courseLanguage === 'en-US' ? 'Welcome to AI Classroom' : '欢迎来到AI课堂';
 
-      if (providerId === 'browser-native-tts') {
+      const providerConfig = ttsProvidersConfig[providerId];
+      const compatibleProviderId = providerConfig?.compatibleProviderId || providerId;
+
+      if (compatibleProviderId === 'browser-native-tts') {
         const { promise, cancel } = playBrowserTTSPreview({ text: previewText, voice: voiceId });
         previewCancelRef.current = cancel;
         try {
@@ -325,7 +336,6 @@ function TeacherVoicePill({
       try {
         const controller = new AbortController();
         previewAbortRef.current = controller;
-        const providerConfig = ttsProvidersConfig[providerId];
         const res = await fetch('/api/generate/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -333,18 +343,22 @@ function TeacherVoicePill({
             text: previewText,
             audioId: 'voice-preview',
             ttsProviderId: providerId,
+            ttsCompatibleProviderId: compatibleProviderId,
             ttsModelId: modelId || providerConfig?.modelId,
             ttsVoice: voiceId,
             ttsSpeed: 1,
             ttsApiKey: providerConfig?.apiKey,
             ttsBaseUrl: providerConfig?.serverBaseUrl || providerConfig?.baseUrl,
+            ttsProviderOptions: providerConfig?.providerOptions,
           }),
           signal: controller.signal,
         });
         if (!res.ok) throw new Error('TTS error');
         const data = await res.json();
         if (!data.base64) throw new Error('No audio');
-        const audio = new Audio(`data:audio/${data.format || 'mp3'};base64,${data.base64}`);
+        const audio = new Audio(
+          `data:${getAudioMimeType(data.format || 'mp3')};base64,${data.base64}`,
+        );
         previewAudioRef.current = audio;
         audio.addEventListener('ended', () => setPreviewingId(null));
         audio.addEventListener('error', () => setPreviewingId(null));
@@ -479,6 +493,8 @@ export function AgentBar() {
   const setMaxTurns = useSettingsStore((s) => s.setMaxTurns);
   const agentMode = useSettingsStore((s) => s.agentMode);
   const setAgentMode = useSettingsStore((s) => s.setAgentMode);
+  const agentGenerationModelProfile = useSettingsStore((s) => s.agentGenerationModelProfile);
+  const setAgentGenerationModelProfile = useSettingsStore((s) => s.setAgentGenerationModelProfile);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const ttsEnabled = useSettingsStore((s) => s.ttsEnabled);
 
@@ -793,6 +809,23 @@ export function AgentBar() {
                     <p className="text-[10px] text-muted-foreground/40">
                       {t('agentBar.voiceAutoAssign')}
                     </p>
+                  </div>
+                  <div className="flex w-full items-center justify-between gap-3 rounded-md border border-border/40 bg-muted/20 px-2 py-2">
+                    <div className="min-w-0 text-left">
+                      <p className="truncate text-[11px] font-medium">
+                        {t('settings.agentGenerationUseLightweightModel')}
+                      </p>
+                      <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground/50">
+                        {t('settings.agentGenerationUseLightweightModelDesc')}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={agentGenerationModelProfile === 'lightweight'}
+                      onCheckedChange={(checked) =>
+                        setAgentGenerationModelProfile(checked ? 'lightweight' : 'main')
+                      }
+                      aria-label={t('settings.agentGenerationUseLightweightModel')}
+                    />
                   </div>
                 </div>
               )}

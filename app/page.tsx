@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -18,6 +18,12 @@ import {
   Monitor,
   BotOff,
   ChevronUp,
+  BookOpen,
+  ClipboardCheck,
+  Compass,
+  LibraryBig,
+  Loader2,
+  Palette,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { LanguageSwitcher } from '@/components/language-switcher';
@@ -30,7 +36,7 @@ import { GenerationToolbar } from '@/components/generation/generation-toolbar';
 import { AgentBar } from '@/components/agent/agent-bar';
 import { useTheme } from '@/lib/hooks/use-theme';
 import { nanoid } from 'nanoid';
-import { storePdfBlob } from '@/lib/utils/image-storage';
+import { loadPdfBlob, storePdfBlob } from '@/lib/utils/image-storage';
 import type { UserRequirements } from '@/lib/types/generation';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useUserProfileStore, AVATAR_OPTIONS } from '@/lib/store/user-profile';
@@ -48,31 +54,172 @@ import { toast } from 'sonner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/components/audio/speech-button';
+import { getModelApiHeaders } from '@/lib/utils/model-config';
+import {
+  getActiveBookLearningPlan,
+  deleteBookLearningPlan,
+  listBookLearningPlans,
+  saveBookLearningPlan,
+  setActiveBookLearningPlanId,
+  startBookLesson,
+} from '@/lib/utils/book-learning-storage';
+import { buildBookLessonGenerationSession } from '@/lib/utils/book-lesson-generation-session';
+import type { BookLearningPlan } from '@/lib/types/book-learning';
+import type { Locale } from '@/lib/i18n';
+import { shouldUseOpenAIResponsesApi } from '@/lib/ai/openai-routing';
+import { useTourStore } from '@/lib/store/tour';
+import { trackEvent } from '@/lib/telemetry';
+import { COLOR_THEME_PRESETS } from '@/lib/theme/color-themes';
+import { getCurrentColorTheme } from '@/lib/theme/theme-runtime';
 
 const log = createLogger('Home');
 
-const WEB_SEARCH_STORAGE_KEY = 'webSearchEnabled';
 const LANGUAGE_STORAGE_KEY = 'generationLanguage';
 const RECENT_OPEN_STORAGE_KEY = 'recentClassroomsOpen';
+const PDF_COVER_IMAGE_VERSION = 3;
+const BOOK_PDF_PARSE_TIMEOUT_MS = 15 * 60 * 1000;
+const BOOK_PDF_FAST_MAX_PAGES = 8;
+
+type ParsePdfApiResponse = {
+  success?: boolean;
+  data?: {
+    text: string;
+    images?: string[];
+    coverImage?: string;
+    metadata?: {
+      fileName?: string;
+      fileSize?: number;
+      pageCount?: number;
+    };
+  };
+  error?: string;
+};
+
+async function readApiJson<T>(response: Response, fallbackError: string): Promise<T> {
+  const contentType = response.headers.get('content-type') || '';
+  const body = await response.text();
+
+  if (!contentType.toLowerCase().includes('application/json')) {
+    log.error('API returned a non-JSON response:', {
+      url: response.url,
+      status: response.status,
+      statusText: response.statusText,
+      contentType: contentType || 'unknown',
+      bodyPreview: body.replace(/\s+/g, ' ').slice(0, 200),
+    });
+    throw new Error(fallbackError);
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch (error) {
+    log.error('Failed to parse API JSON response:', {
+      url: response.url,
+      status: response.status,
+      contentType,
+      bodyPreview: body.replace(/\s+/g, ' ').slice(0, 200),
+      error,
+    });
+    throw new Error(fallbackError);
+  }
+}
+
+type GenerateBookPlanApiResponse = {
+  success?: boolean;
+  plan?: BookLearningPlan;
+  warning?: string;
+  error?: string;
+};
+
+type PdfCoverApiResponse = {
+  success?: boolean;
+  coverImage?: string;
+  error?: string;
+};
+
+function isInlineImageSrc(src: unknown): src is string {
+  return typeof src === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(src.trim());
+}
+
+function getInlineParsedCoverImage(data?: ParsePdfApiResponse['data']): string | undefined {
+  if (isInlineImageSrc(data?.coverImage)) return data.coverImage;
+  return data?.images?.find(isInlineImageSrc);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function getBookPdfParseTimeoutMessage(locale: Locale): string {
+  return locale === 'zh-CN'
+    ? 'PDF 快速解析超时。Bingo 已在首次快速超时后自动重启 MinerU 并延长时间重试，仍未完成；如果文件很大，可以拆分 PDF，或调高 BINGO_MINERU_FAST_PDF_RETRY_TASK_TIMEOUT_MS。'
+    : 'Fast PDF parsing timed out. Bingo already restarted MinerU after the initial fast timeout and retried with a longer window; split a large PDF or increase BINGO_MINERU_FAST_PDF_RETRY_TASK_TIMEOUT_MS.';
+}
+
+async function renderPdfCoverFromFile(file: File): Promise<string | undefined> {
+  try {
+    const formData = new FormData();
+    formData.append(
+      'pdf',
+      new File([file], file.name || 'book.pdf', {
+        type: file.type || 'application/pdf',
+      }),
+    );
+
+    const response = await fetch('/api/pdf-cover', {
+      method: 'POST',
+      body: formData,
+    });
+    const result = (await response.json()) as PdfCoverApiResponse;
+    if (!response.ok || !result.success || !isInlineImageSrc(result.coverImage)) {
+      log.warn('Failed to render PDF cover:', result.error || response.statusText);
+      return undefined;
+    }
+
+    return result.coverImage;
+  } catch (err) {
+    log.warn('Failed to render PDF cover:', err);
+    return undefined;
+  }
+}
+
+function getBookPlanProgress(plan: BookLearningPlan) {
+  const completedLessons = plan.lessons.filter((lesson) => lesson.status === 'completed').length;
+  const progressPercent = plan.totalLessons
+    ? Math.round((completedLessons / plan.totalLessons) * 100)
+    : 0;
+  const nextLesson = plan.lessons.find((lesson) => lesson.status !== 'completed') ?? null;
+  const currentLesson =
+    nextLesson ??
+    plan.lessons[plan.currentLessonIndex] ??
+    plan.lessons[plan.lessons.length - 1] ??
+    null;
+
+  return {
+    completedLessons,
+    progressPercent,
+    nextLesson,
+    currentLesson,
+  };
+}
 
 interface FormState {
   pdfFile: File | null;
   requirement: string;
   language: 'zh-CN' | 'en-US';
-  webSearch: boolean;
 }
 
 const initialFormState: FormState = {
   pdfFile: null,
   requirement: '',
   language: 'zh-CN',
-  webSearch: false,
 };
 
 function HomePage() {
-  const { t } = useI18n();
-  const { theme, setTheme } = useTheme();
+  const { t, locale } = useI18n();
+  const { theme, setTheme, colorTheme, setColorTheme } = useTheme();
   const router = useRouter();
+  const startTour = useTourStore.use.startTour();
   const [form, setForm] = useState<FormState>(initialFormState);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<
@@ -88,7 +235,6 @@ function HomePage() {
   const [recentOpen, setRecentOpen] = useState(true);
 
   // Hydrate client-only state after mount (avoids SSR mismatch)
-  /* eslint-disable react-hooks/set-state-in-effect -- Hydration from localStorage must happen in effect */
   useEffect(() => {
     try {
       const saved = localStorage.getItem(RECENT_OPEN_STORAGE_KEY);
@@ -97,15 +243,12 @@ function HomePage() {
       /* localStorage unavailable */
     }
     try {
-      const savedWebSearch = localStorage.getItem(WEB_SEARCH_STORAGE_KEY);
       const savedLanguage = localStorage.getItem(LANGUAGE_STORAGE_KEY);
       const updates: Partial<FormState> = {};
-      if (savedWebSearch === 'true') updates.webSearch = true;
       if (savedLanguage === 'zh-CN' || savedLanguage === 'en-US') {
         updates.language = savedLanguage;
       } else {
-        const detected = navigator.language?.startsWith('zh') ? 'zh-CN' : 'en-US';
-        updates.language = detected;
+        updates.language = locale === 'zh-CN' ? 'zh-CN' : 'en-US';
       }
       if (Object.keys(updates).length > 0) {
         setForm((prev) => ({ ...prev, ...updates }));
@@ -113,8 +256,7 @@ function HomePage() {
     } catch {
       /* localStorage unavailable */
     }
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  }, [locale]);
 
   // Restore requirement draft from cache (derived state pattern — no effect needed)
   const [prevCachedRequirement, setPrevCachedRequirement] = useState(cachedRequirement);
@@ -130,8 +272,28 @@ function HomePage() {
   const [classrooms, setClassrooms] = useState<StageListItem[]>([]);
   const [thumbnails, setThumbnails] = useState<Record<string, Slide>>({});
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [pendingDeleteBookPlanId, setPendingDeleteBookPlanId] = useState<string | null>(null);
+  const [bookPlans, setBookPlans] = useState<BookLearningPlan[]>([]);
+  const [activeBookPlan, setActiveBookPlan] = useState<BookLearningPlan | null>(null);
+  const [bookShelfOpen, setBookShelfOpen] = useState(false);
+  const [isCreatingBookPlan, setIsCreatingBookPlan] = useState(false);
+  const [isDeletingBookPlan, setIsDeletingBookPlan] = useState(false);
+  const [openingClassroomId, setOpeningClassroomId] = useState<string | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const previousHtmlOverflow = html.style.overflow;
+    const previousBodyOverflow = body.style.overflow;
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = previousHtmlOverflow;
+      body.style.overflow = previousBodyOverflow;
+    };
+  }, []);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -145,7 +307,7 @@ function HomePage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [themeOpen]);
 
-  const loadClassrooms = async () => {
+  const loadClassrooms = useCallback(async () => {
     try {
       const list = await listStages();
       setClassrooms(list);
@@ -157,7 +319,95 @@ function HomePage() {
     } catch (err) {
       log.error('Failed to load classrooms:', err);
     }
-  };
+  }, []);
+
+  const prefetchClassroom = useCallback(
+    (id: string) => {
+      try {
+        router.prefetch(`/classroom/${id}`);
+      } catch {
+        /* prefetch is best-effort */
+      }
+    },
+    [router],
+  );
+
+  const openClassroom = useCallback(
+    (id: string) => {
+      const href = `/classroom/${id}`;
+      setOpeningClassroomId(id);
+      try {
+        router.prefetch(href);
+      } catch {
+        /* prefetch is best-effort */
+      }
+      router.push(href);
+    },
+    [router],
+  );
+
+  const refreshBookPlanCover = useCallback(async (plan: BookLearningPlan) => {
+    try {
+      const pdfBlob = await loadPdfBlob(plan.pdfStorageKey);
+      if (!pdfBlob) return;
+
+      const formData = new FormData();
+      formData.append(
+        'pdf',
+        new File([pdfBlob], plan.fileName || 'book.pdf', {
+          type: pdfBlob.type || 'application/pdf',
+        }),
+      );
+
+      const response = await fetch('/api/pdf-cover', {
+        method: 'POST',
+        body: formData,
+      });
+      const result = (await response.json()) as PdfCoverApiResponse;
+      if (!response.ok || !result.success || !isInlineImageSrc(result.coverImage)) {
+        if (plan.coverImage && !isInlineImageSrc(plan.coverImage)) {
+          const updatedPlan: BookLearningPlan = {
+            ...plan,
+            coverImage: undefined,
+            coverImageVersion: undefined,
+          };
+          await saveBookLearningPlan(updatedPlan);
+          setActiveBookPlan((current) => (current?.id === plan.id ? updatedPlan : current));
+          setBookPlans((current) =>
+            current.map((item) => (item.id === plan.id ? updatedPlan : item)),
+          );
+        }
+        return;
+      }
+
+      const updatedPlan: BookLearningPlan = {
+        ...plan,
+        coverImage: result.coverImage,
+        coverImageVersion: PDF_COVER_IMAGE_VERSION,
+      };
+      await saveBookLearningPlan(updatedPlan);
+      setActiveBookPlan((current) => (current?.id === plan.id ? updatedPlan : current));
+      setBookPlans((current) => current.map((item) => (item.id === plan.id ? updatedPlan : item)));
+    } catch (err) {
+      log.warn('Failed to refresh book cover:', err);
+    }
+  }, []);
+
+  const loadBookPlan = useCallback(async () => {
+    try {
+      const [plans, plan] = await Promise.all([
+        listBookLearningPlans(),
+        getActiveBookLearningPlan(),
+      ]);
+      setBookPlans(plans);
+      setActiveBookPlan(plan);
+      if (plan && plan.coverImageVersion !== PDF_COVER_IMAGE_VERSION) {
+        void refreshBookPlanCover(plan);
+      }
+    } catch (err) {
+      log.error('Failed to load book learning plan:', err);
+    }
+  }, [refreshBookPlanCover]);
 
   useEffect(() => {
     // Clear stale media store to prevent cross-course thumbnail contamination.
@@ -166,9 +416,15 @@ function HomePage() {
     useMediaGenerationStore.getState().revokeObjectUrls();
     useMediaGenerationStore.setState({ tasks: {} });
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- Store hydration on mount
     loadClassrooms();
-  }, []);
+    loadBookPlan();
+  }, [loadBookPlan, loadClassrooms]);
+
+  useEffect(() => {
+    for (const classroom of classrooms.slice(0, 12)) {
+      prefetchClassroom(classroom.id);
+    }
+  }, [classrooms, prefetchClassroom]);
 
   const handleDelete = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -186,6 +442,67 @@ function HomePage() {
     }
   };
 
+  const clearDeletedBookPlanSessions = (planId: string) => {
+    try {
+      const rawGenerationSession = sessionStorage.getItem('generationSession');
+      if (rawGenerationSession) {
+        const parsed = JSON.parse(rawGenerationSession) as {
+          bookLessonContext?: { planId?: string };
+        };
+        if (parsed.bookLessonContext?.planId === planId) {
+          sessionStorage.removeItem('generationSession');
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const rawBookLessonSession = sessionStorage.getItem('bookLessonSession');
+      if (rawBookLessonSession) {
+        const parsed = JSON.parse(rawBookLessonSession) as { planId?: string };
+        if (parsed.planId === planId) {
+          sessionStorage.removeItem('bookLessonSession');
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleSelectBookPlan = (plan: BookLearningPlan) => {
+    setActiveBookLearningPlanId(plan.id);
+    setActiveBookPlan(plan);
+    setBookShelfOpen(false);
+    setPendingDeleteBookPlanId(null);
+    if (plan.coverImageVersion !== PDF_COVER_IMAGE_VERSION) {
+      void refreshBookPlanCover(plan);
+    }
+  };
+
+  const confirmDeleteBookPlan = async (planId: string) => {
+    setIsDeletingBookPlan(true);
+    try {
+      await deleteBookLearningPlan(planId);
+      clearDeletedBookPlanSessions(planId);
+      const plans = await listBookLearningPlans();
+      const nextActivePlan = plans[0] ?? null;
+      setBookPlans(plans);
+      setActiveBookPlan(nextActivePlan);
+      setActiveBookLearningPlanId(nextActivePlan?.id ?? null);
+      if (!nextActivePlan) {
+        setBookShelfOpen(false);
+      }
+      toast.success(locale === 'zh-CN' ? '学习计划已删除' : 'Learning plan deleted');
+    } catch (err) {
+      log.error('Failed to delete book learning plan:', err);
+      toast.error(locale === 'zh-CN' ? '删除学习计划失败' : 'Failed to delete learning plan');
+    } finally {
+      setPendingDeleteBookPlanId(null);
+      setIsDeletingBookPlan(false);
+    }
+  };
+
   const handleRename = async (id: string, newName: string) => {
     try {
       await renameStage(id, newName);
@@ -199,12 +516,21 @@ function HomePage() {
   const updateForm = <K extends keyof FormState>(field: K, value: FormState[K]) => {
     setForm((prev) => ({ ...prev, [field]: value }));
     try {
-      if (field === 'webSearch') localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(value));
       if (field === 'language') localStorage.setItem(LANGUAGE_STORAGE_KEY, String(value));
       if (field === 'requirement') updateRequirementCache(value as string);
     } catch {
       /* ignore */
     }
+  };
+
+  const syncGenerationLanguageFromLocale = (nextLocale: Locale) => {
+    const nextLanguage: FormState['language'] = nextLocale === 'zh-CN' ? 'zh-CN' : 'en-US';
+    updateForm('language', nextLanguage);
+    toast.success(
+      nextLanguage === 'zh-CN'
+        ? '已切换为简体中文，之后所有生成都会使用简体中文'
+        : 'Switched to English. Future generation will use English.',
+    );
   };
 
   const showSetupToast = (icon: React.ReactNode, title: string, desc: string) => {
@@ -249,7 +575,7 @@ function HomePage() {
       return;
     }
 
-    if (!form.requirement.trim()) {
+    if (!form.requirement.trim() && !form.pdfFile) {
       setError(t('upload.requirementRequired'));
       return;
     }
@@ -257,13 +583,18 @@ function HomePage() {
     setError(null);
 
     try {
+      const activeColorTheme = getCurrentColorTheme(colorTheme);
       const userProfile = useUserProfileStore.getState();
+      const defaultPdfRequirement =
+        form.language === 'zh-CN'
+          ? '请根据我上传的 PDF 生成一个完整的互动课堂，包括讲解幻灯片、知识检查题目，以及必要的补充示例、互动或项目活动。'
+          : 'Generate a complete interactive classroom from the uploaded PDF, including lecture slides, knowledge-check questions, and useful supplementary examples, interactions, or activities.';
       const requirements: UserRequirements = {
-        requirement: form.requirement,
+        requirement: form.requirement.trim() || defaultPdfRequirement,
         language: form.language,
         userNickname: userProfile.nickname || undefined,
         userBio: userProfile.bio || undefined,
-        webSearch: form.webSearch || undefined,
+        visualTheme: activeColorTheme,
       };
 
       let pdfStorageKey: string | undefined;
@@ -320,26 +651,281 @@ function HomePage() {
     return date.toLocaleDateString();
   };
 
-  const canGenerate = !!form.requirement.trim();
+  const canGenerate = !!form.requirement.trim() && !isCreatingBookPlan;
+  const canCreateBookPlan = !!form.pdfFile && !isCreatingBookPlan;
+  const canStartBookPractice =
+    !!activeBookPlan &&
+    (activeBookPlan.mode === 'completed_pending_practice' || activeBookPlan.mode === 'practice') &&
+    !form.pdfFile &&
+    !form.requirement.trim() &&
+    !isCreatingBookPlan;
+  const primaryActionEnabled = canCreateBookPlan || canGenerate || canStartBookPractice;
+
+  const getApiHeaders = () => {
+    return getModelApiHeaders();
+  };
+
+  const createBookLearningPlan = async () => {
+    if (!currentModelId) {
+      showSetupToast(
+        <BotOff className="size-4.5 text-amber-600 dark:text-amber-400" />,
+        t('settings.modelNotConfigured'),
+        t('settings.setupNeeded'),
+      );
+      setSettingsOpen(true);
+      return;
+    }
+
+    if (!form.pdfFile) {
+      setError('Please upload a PDF book first');
+      return;
+    }
+
+    setError(null);
+    setIsCreatingBookPlan(true);
+
+    try {
+      const pdfStorageKey = await storePdfBlob(form.pdfFile);
+      const parseFormData = new FormData();
+      parseFormData.append('pdf', form.pdfFile);
+
+      const settings = useSettingsStore.getState();
+      parseFormData.append('providerId', settings.pdfProviderId);
+      const providerCfg = settings.pdfProvidersConfig?.[settings.pdfProviderId];
+      if (providerCfg?.apiKey?.trim()) {
+        parseFormData.append('apiKey', providerCfg.apiKey);
+      }
+      if (providerCfg?.baseUrl?.trim()) {
+        parseFormData.append('baseUrl', providerCfg.baseUrl);
+      }
+      parseFormData.append('mode', 'fast');
+      parseFormData.append('needsCover', 'false');
+      parseFormData.append('needsImages', 'false');
+      parseFormData.append('needsMiddleJson', 'false');
+      parseFormData.append('maxPages', String(BOOK_PDF_FAST_MAX_PAGES));
+
+      const parseAbortController = new AbortController();
+      const parseTimeout = window.setTimeout(() => {
+        parseAbortController.abort();
+      }, BOOK_PDF_PARSE_TIMEOUT_MS);
+      let parseResponse: Response;
+      try {
+        parseResponse = await fetch('/api/parse-pdf', {
+          method: 'POST',
+          body: parseFormData,
+          signal: parseAbortController.signal,
+        });
+      } catch (error) {
+        if (isAbortError(error)) {
+          throw new Error(getBookPdfParseTimeoutMessage(locale));
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(parseTimeout);
+      }
+      const parseResult = await readApiJson<ParsePdfApiResponse>(
+        parseResponse,
+        t('generation.pdfParseFailed'),
+      );
+
+      if (parseResponse.status === 504) {
+        throw new Error(getBookPdfParseTimeoutMessage(locale));
+      }
+
+      if (!parseResponse.ok || !parseResult.success || !parseResult.data?.text) {
+        throw new Error(parseResult.error || t('generation.pdfParseFailed'));
+      }
+
+      const coverImage =
+        (await renderPdfCoverFromFile(form.pdfFile)) ?? getInlineParsedCoverImage(parseResult.data);
+
+      const planResponse = await fetch('/api/generate/book-plan', {
+        method: 'POST',
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          fileName: form.pdfFile.name,
+          fileSize: form.pdfFile.size,
+          pdfStorageKey,
+          coverImage,
+          coverImageVersion: coverImage ? PDF_COVER_IMAGE_VERSION : undefined,
+          pdfText: parseResult.data.text,
+          language: form.language,
+        }),
+      });
+      const planResult = (await planResponse.json()) as GenerateBookPlanApiResponse;
+
+      if (!planResponse.ok || !planResult.success || !planResult.plan) {
+        throw new Error(planResult.error || 'Failed to generate the book learning plan');
+      }
+
+      await saveBookLearningPlan(planResult.plan);
+      setActiveBookLearningPlanId(planResult.plan.id);
+      setActiveBookPlan(planResult.plan);
+      setBookPlans((current) => [
+        planResult.plan!,
+        ...current.filter((plan) => plan.id !== planResult.plan!.id),
+      ]);
+      setBookShelfOpen(false);
+      updateForm('pdfFile', null);
+      if (planResult.warning) toast.warning(planResult.warning);
+      else toast.success('Book learning plan generated');
+    } catch (err) {
+      log.error('Failed to create book learning plan:', err);
+      setError(err instanceof Error ? err.message : 'Failed to generate the book learning plan');
+    } finally {
+      setIsCreatingBookPlan(false);
+    }
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      if (canGenerate) handleGenerate();
+      if (canCreateBookPlan) createBookLearningPlan();
+      else if (canStartBookLesson) handleBookLessonStart();
+      else if (canStartBookPractice) handleBookPracticeStart();
+      else if (canGenerate) handleGenerate();
     }
   };
 
-  return (
-    <div className="min-h-[100dvh] w-full bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex flex-col items-center p-4 pt-16 md:p-8 md:pt-16 overflow-x-hidden">
-      {/* ═══ Top-right pill (unchanged) ═══ */}
-      <div
-        ref={toolbarRef}
-        className="fixed top-4 right-4 z-50 flex items-center gap-1 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md px-2 py-1.5 rounded-full border border-gray-100/50 dark:border-gray-700/50 shadow-sm"
-      >
-        {/* Language Selector */}
-        <LanguageSwitcher onOpen={() => setThemeOpen(false)} />
+  const activeBookProgress = activeBookPlan ? getBookPlanProgress(activeBookPlan) : null;
+  const completedLessons = activeBookProgress?.completedLessons ?? 0;
+  const progressPercent = activeBookProgress?.progressPercent ?? 0;
+  const nextBookLesson = activeBookProgress?.nextLesson ?? null;
+  const currentBookLesson = activeBookProgress?.currentLesson ?? null;
+  const canStartBookLesson =
+    !!activeBookPlan &&
+    !!nextBookLesson &&
+    activeBookPlan.mode !== 'practice' &&
+    activeBookPlan.mode !== 'completed_pending_practice' &&
+    !form.pdfFile &&
+    !form.requirement.trim() &&
+    !isCreatingBookPlan;
+  const bookLessonActionLabel =
+    activeBookPlan && nextBookLesson
+      ? completedLessons === 0 && nextBookLesson.status !== 'in_progress'
+        ? 'Start Lesson 1'
+        : 'Continue Class'
+      : activeBookPlan?.mode === 'completed_pending_practice' || activeBookPlan?.mode === 'practice'
+        ? 'Start Practice'
+        : '';
+  const deleteBookPlanLabel = locale === 'zh-CN' ? '删除学习计划' : 'Delete learning plan';
+  const deleteBookPlanConfirmText =
+    locale === 'zh-CN' ? '删除当前学习计划？' : 'Delete the current learning plan?';
+  const deletingBookPlanLabel = locale === 'zh-CN' ? '删除中...' : 'Deleting...';
 
-        <div className="w-[1px] h-4 bg-gray-200 dark:bg-gray-700" />
+  const handleBookPracticeStart = () => {
+    if (!activeBookPlan) return;
+
+    if (!currentModelId) {
+      showSetupToast(
+        <BotOff className="size-4.5 text-amber-600 dark:text-amber-400" />,
+        t('settings.modelNotConfigured'),
+        t('settings.setupNeeded'),
+      );
+      setSettingsOpen(true);
+      return;
+    }
+
+    const settings = useSettingsStore.getState();
+    const providerCfg = settings.providersConfig?.[settings.providerId];
+    const responsesBaseUrl = providerCfg?.baseUrl || providerCfg?.serverBaseUrl;
+    if (!shouldUseOpenAIResponsesApi(settings.providerId, responsesBaseUrl)) {
+      setError(
+        'Practice mode requires OpenAI Responses API. Use native OpenAI or configure /responses in the compatible provider base URL.',
+      );
+      setSettingsOpen(true);
+      return;
+    }
+
+    setActiveBookLearningPlanId(activeBookPlan.id);
+    router.push(`/book-practice?planId=${encodeURIComponent(activeBookPlan.id)}`);
+  };
+
+  const handleBookLessonStart = async () => {
+    if (!activeBookPlan || !nextBookLesson) return;
+
+    if (!currentModelId) {
+      showSetupToast(
+        <BotOff className="size-4.5 text-amber-600 dark:text-amber-400" />,
+        t('settings.modelNotConfigured'),
+        t('settings.setupNeeded'),
+      );
+      setSettingsOpen(true);
+      return;
+    }
+
+    setError(null);
+
+    try {
+      const activeColorTheme = getCurrentColorTheme(colorTheme);
+      const updatedPlan = await startBookLesson(activeBookPlan.id, nextBookLesson.id);
+      const lesson =
+        updatedPlan.lessons.find((item) => item.id === nextBookLesson.id) ?? nextBookLesson;
+      const language = updatedPlan.language || form.language;
+      const userProfile = useUserProfileStore.getState();
+
+      const settings = useSettingsStore.getState();
+      const providerCfg = settings.pdfProvidersConfig?.[settings.pdfProviderId];
+      const sessionState = buildBookLessonGenerationSession({
+        plan: updatedPlan,
+        lesson,
+        language,
+        userNickname: userProfile.nickname || undefined,
+        userBio: userProfile.bio || undefined,
+        visualTheme: activeColorTheme,
+        pdfProviderId: settings.pdfProviderId,
+        pdfProviderConfig: providerCfg
+          ? {
+              apiKey: providerCfg.apiKey,
+              baseUrl: providerCfg.baseUrl,
+            }
+          : undefined,
+      });
+      sessionStorage.setItem('generationSession', JSON.stringify(sessionState));
+      sessionStorage.removeItem('bookLessonSession');
+      setActiveBookLearningPlanId(updatedPlan.id);
+      setActiveBookPlan(updatedPlan);
+      setBookPlans((current) =>
+        current.map((plan) => (plan.id === updatedPlan.id ? updatedPlan : plan)),
+      );
+      router.push('/generation-preview');
+    } catch (err) {
+      log.error('Failed to start book lesson classroom:', err);
+      setError(err instanceof Error ? err.message : 'Failed to start the lesson classroom');
+    }
+  };
+
+  const handleStartTourFromHome = () => {
+    const targetClassroom = classrooms[0];
+    if (!targetClassroom) {
+      toast.info(
+        locale === 'zh-CN'
+          ? '请先创建或打开一个课堂，导览会在课堂中演示完整 ICAP 流程。'
+          : 'Create or open a classroom first. The tour runs inside a classroom.',
+      );
+      return;
+    }
+
+    startTour();
+    trackEvent('icap_tour', {
+      type: 'tour_started_from_home',
+      classroomId: targetClassroom.id,
+    });
+    router.push(`/classroom/${targetClassroom.id}`);
+  };
+
+  return (
+    <div
+      className="relative h-[100dvh] min-h-[100dvh] w-full overflow-hidden overscroll-none bg-background text-foreground"
+      style={{ background: 'var(--app-gradient)' }}
+    >
+      {/* ═══ Top-right pill (unchanged) ═══ */}
+      <div ref={toolbarRef} className="fixed top-5 right-5 z-50 flex items-center gap-3">
+        {/* Language Selector */}
+        <LanguageSwitcher
+          onOpen={() => setThemeOpen(false)}
+          onLocaleChange={syncGenerationLanguageFromLocale}
+        />
 
         {/* Theme Selector */}
         <div className="relative">
@@ -347,23 +933,26 @@ function HomePage() {
             onClick={() => {
               setThemeOpen(!themeOpen);
             }}
-            className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all"
+            className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-all hover:bg-card/70 hover:text-foreground hover:shadow-[0_10px_30px_rgba(var(--app-shadow-rgb),0.12)]"
+            title={t('settings.theme')}
           >
             {theme === 'light' && <Sun className="w-4 h-4" />}
             {theme === 'dark' && <Moon className="w-4 h-4" />}
             {theme === 'system' && <Monitor className="w-4 h-4" />}
           </button>
           {themeOpen && (
-            <div className="absolute top-full mt-2 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg overflow-hidden z-50 min-w-[140px]">
+            <div className="absolute top-full mt-3 right-0 z-50 w-[260px] overflow-hidden rounded-xl border border-border/70 bg-popover/95 p-1.5 text-popover-foreground shadow-[0_18px_50px_rgba(var(--app-shadow-rgb),0.16)] backdrop-blur-xl">
+              <div className="px-2 py-1.5 text-[11px] font-semibold text-muted-foreground">
+                {locale === 'zh-CN' ? '显示模式' : 'Display'}
+              </div>
               <button
                 onClick={() => {
                   setTheme('light');
                   setThemeOpen(false);
                 }}
                 className={cn(
-                  'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
-                  theme === 'light' &&
-                    'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
+                  'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent/60',
+                  theme === 'light' && 'bg-primary/10 text-primary',
                 )}
               >
                 <Sun className="w-4 h-4" />
@@ -375,9 +964,8 @@ function HomePage() {
                   setThemeOpen(false);
                 }}
                 className={cn(
-                  'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
-                  theme === 'dark' &&
-                    'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
+                  'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent/60',
+                  theme === 'dark' && 'bg-primary/10 text-primary',
                 )}
               >
                 <Moon className="w-4 h-4" />
@@ -389,25 +977,56 @@ function HomePage() {
                   setThemeOpen(false);
                 }}
                 className={cn(
-                  'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
-                  theme === 'system' &&
-                    'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
+                  'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent/60',
+                  theme === 'system' && 'bg-primary/10 text-primary',
                 )}
               >
                 <Monitor className="w-4 h-4" />
                 {t('settings.themeOptions.system')}
               </button>
+              <div className="mx-2 my-1 border-t border-border/70" />
+              <div className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold text-muted-foreground">
+                <Palette className="size-3.5" />
+                {locale === 'zh-CN' ? '配色方案' : 'Color Scheme'}
+              </div>
+              {COLOR_THEME_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => {
+                    setColorTheme(preset.id);
+                    setThemeOpen(false);
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent/60',
+                    colorTheme === preset.id && 'bg-primary/10 text-primary',
+                  )}
+                >
+                  <span className="flex shrink-0 overflow-hidden rounded-full ring-1 ring-border">
+                    <span className="h-4 w-4" style={{ backgroundColor: preset.light.primary }} />
+                    <span className="h-4 w-4" style={{ backgroundColor: preset.light.accent }} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">
+                      {locale === 'zh-CN' ? preset.label.zh : preset.label.en}
+                    </span>
+                    <span className="block truncate text-[11px] text-muted-foreground">
+                      {locale === 'zh-CN' ? preset.description.zh : preset.description.en}
+                    </span>
+                  </span>
+                  {colorTheme === preset.id && <Check className="size-3.5 shrink-0" />}
+                </button>
+              ))}
             </div>
           )}
         </div>
-
-        <div className="w-[1px] h-4 bg-gray-200 dark:bg-gray-700" />
 
         {/* Settings Button */}
         <div className="relative">
           <button
             onClick={() => setSettingsOpen(true)}
-            className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
+            className="group flex size-9 items-center justify-center rounded-full text-muted-foreground transition-all hover:bg-card/70 hover:text-foreground hover:shadow-[0_10px_30px_rgba(var(--app-shadow-rgb),0.12)]"
+            title={t('settings.title')}
           >
             <Settings className="w-4 h-4 group-hover:rotate-90 transition-transform duration-500" />
           </button>
@@ -422,142 +1041,374 @@ function HomePage() {
         initialSection={settingsSection}
       />
 
-      {/* ═══ Background Decor ═══ */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div
-          className="absolute top-0 left-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl animate-pulse"
-          style={{ animationDuration: '4s' }}
-        />
-        <div
-          className="absolute bottom-0 right-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl animate-pulse"
-          style={{ animationDuration: '6s' }}
-        />
+      <div className="fixed left-5 top-5 z-50 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={handleStartTourFromHome}
+          className="inline-flex h-9 items-center gap-2 rounded-full bg-white/78 px-3 text-sm font-medium text-cyan-700 shadow-[0_10px_28px_rgba(88,76,120,0.10)] ring-1 ring-cyan-100/80 backdrop-blur-xl transition-all hover:-translate-y-0.5 hover:bg-white/92 hover:text-cyan-900 dark:bg-slate-950/52 dark:text-cyan-200 dark:ring-cyan-400/20 dark:hover:bg-slate-900"
+          title={locale === 'zh-CN' ? '开启功能导览' : 'Start Feature Tour'}
+          aria-label={locale === 'zh-CN' ? '开启功能导览' : 'Start Feature Tour'}
+        >
+          <Compass className="size-4 text-cyan-500" />
+          <span>{locale === 'zh-CN' ? '开启功能导览' : 'Feature Tour'}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => router.push('/homework')}
+          className="inline-flex h-9 items-center gap-2 rounded-full bg-white/72 px-3 text-sm font-medium text-slate-600 shadow-[0_10px_28px_rgba(88,76,120,0.10)] ring-1 ring-white/70 backdrop-blur-xl transition-all hover:-translate-y-0.5 hover:bg-white/90 hover:text-slate-900 dark:bg-slate-950/48 dark:text-slate-200 dark:ring-white/10 dark:hover:bg-slate-900"
+        >
+          <ClipboardCheck className="size-4 text-violet-500" />
+          <span>{locale === 'zh-CN' ? '作业模式' : 'Homework Mode'}</span>
+        </button>
       </div>
 
       {/* ═══ Hero section: title + input (centered, wider) ═══ */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, ease: 'easeOut' }}
-        className={cn(
-          'relative z-20 w-full max-w-[800px] flex flex-col items-center',
-          classrooms.length === 0 ? 'justify-center min-h-[calc(100dvh-8rem)]' : 'mt-[10vh]',
-        )}
-      >
-        {/* ── Logo ── */}
-        <motion.img
-          src="/logo-horizontal.png"
-          alt="OpenMAIC"
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{
-            delay: 0.1,
-            type: 'spring',
-            stiffness: 200,
-            damping: 20,
-          }}
-          className="h-12 md:h-16 mb-2 -ml-2 md:-ml-3"
-        />
-
-        {/* ── Slogan ── */}
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.25 }}
-          className="text-sm text-muted-foreground/60 mb-8"
-        >
-          {t('home.slogan')}
-        </motion.p>
-
-        {/* ── Unified input area ── */}
+      <div className="pointer-events-none absolute left-1/2 top-[35%] z-20 w-full -translate-x-1/2 -translate-y-1/2 px-4 sm:top-[36%]">
         <motion.div
-          initial={{ opacity: 0, scale: 0.97 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.35 }}
-          className="w-full"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, ease: 'easeOut' }}
+          className="pointer-events-auto mx-auto flex w-full max-w-[840px] flex-col items-center"
         >
-          <div className="w-full rounded-2xl border border-border/60 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl shadow-xl shadow-black/[0.03] dark:shadow-black/20 transition-shadow focus-within:shadow-2xl focus-within:shadow-violet-500/[0.06]">
-            {/* ── Greeting + Profile + Agents ── */}
-            <div className="relative z-20 flex items-start justify-between">
-              <GreetingBar />
-              <div className="pr-3 pt-3.5 shrink-0">
-                <AgentBar />
+          <div className="mb-8 text-center md:mb-9">
+            <motion.h1
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{
+                delay: 0.1,
+                type: 'spring',
+                stiffness: 200,
+                damping: 20,
+              }}
+              className="text-[60px] font-bold leading-none tracking-normal text-[#33333A] md:text-[72px] dark:text-slate-100"
+            >
+              BinGo
+            </motion.h1>
+            {activeBookPlan && (
+              <div className="relative mt-5 w-[min(86vw,260px)]">
+                <button
+                  type="button"
+                  onClick={handleBookLessonStart}
+                  disabled={
+                    !canStartBookLesson ||
+                    isDeletingBookPlan ||
+                    pendingDeleteBookPlanId === activeBookPlan.id
+                  }
+                  className={cn(
+                    'group inline-flex w-full flex-col items-center text-left transition-all',
+                    canStartBookLesson &&
+                      !isDeletingBookPlan &&
+                      pendingDeleteBookPlanId !== activeBookPlan.id
+                      ? 'cursor-pointer hover:-translate-y-0.5'
+                      : 'cursor-default',
+                  )}
+                >
+                  <div className="relative w-[132px] sm:w-[148px]">
+                    <div className="absolute -right-2 top-2 bottom-2 w-4 rounded-r-md bg-[repeating-linear-gradient(90deg,#f8fafc_0px,#e2e8f0_2px,#f8fafc_4px)] shadow-[8px_12px_28px_rgba(88,76,120,0.16)] dark:bg-[repeating-linear-gradient(90deg,#475569_0px,#334155_2px,#475569_4px)]" />
+                    <div className="relative aspect-[3/4] overflow-hidden rounded-l-[5px] rounded-r-lg bg-slate-100 shadow-[0_18px_50px_rgba(88,76,120,0.22)] ring-1 ring-black/5 transition-shadow group-hover:shadow-[0_24px_64px_rgba(88,76,120,0.28)] dark:bg-slate-900 dark:ring-white/10">
+                      <div className="absolute inset-y-0 left-0 z-20 w-5 bg-gradient-to-r from-black/36 via-black/12 to-transparent" />
+                      <div className="absolute inset-y-0 left-4 z-20 w-px bg-white/28" />
+                      {activeBookPlan.coverImage ? (
+                        <img
+                          src={activeBookPlan.coverImage}
+                          alt=""
+                          className="h-full w-full object-contain bg-white"
+                          draggable={false}
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center bg-[linear-gradient(145deg,#f8fafc_0%,#e9d5ff_48%,#dbeafe_100%)] dark:bg-[linear-gradient(145deg,#1e293b_0%,#4c1d95_58%,#172554_100%)]">
+                          <BookOpen className="size-10 text-violet-500/70 dark:text-violet-200/70" />
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/52 via-transparent to-white/10" />
+                      <div className="absolute inset-x-0 bottom-0 z-30 p-2.5 text-white">
+                        <div className="truncate text-xs font-semibold drop-shadow">
+                          {activeBookPlan.title}
+                        </div>
+                        <div className="mt-1 flex items-center gap-1.5 text-[10px] text-white/82">
+                          <span className="tabular-nums">{progressPercent}%</span>
+                          <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/28">
+                            <div
+                              className="h-full rounded-full bg-white"
+                              style={{ width: `${progressPercent}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-2.5 w-[min(86vw,260px)] rounded-full bg-white/68 px-3 py-2 text-center shadow-[0_12px_34px_rgba(88,76,120,0.10)] ring-1 ring-white/70 backdrop-blur-xl dark:bg-slate-950/45 dark:ring-white/10">
+                    <div className="truncate text-xs font-medium text-slate-600 dark:text-slate-200">
+                      {completedLessons}/{activeBookPlan.totalLessons} lessons
+                      {currentBookLesson
+                        ? ` · Lesson ${currentBookLesson.order}: ${currentBookLesson.title}`
+                        : ''}
+                    </div>
+                    {bookLessonActionLabel && (
+                      <div className="mt-0.5 text-[11px] font-medium text-violet-500">
+                        {bookLessonActionLabel}
+                      </div>
+                    )}
+                  </div>
+                </button>
+                {bookPlans.length > 1 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="absolute left-0 top-0 h-8 rounded-full bg-black/30 px-2.5 text-[11px] font-medium text-white shadow-sm backdrop-blur-sm transition-colors hover:bg-black/45 hover:text-white"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setBookShelfOpen((open) => !open);
+                      setPendingDeleteBookPlanId(null);
+                    }}
+                    title={locale === 'zh-CN' ? '切换书本计划' : 'Switch book plan'}
+                    aria-label={locale === 'zh-CN' ? '切换书本计划' : 'Switch book plan'}
+                  >
+                    <LibraryBig className="size-3.5" />
+                    <span>{bookPlans.length}</span>
+                  </Button>
+                )}
+                {pendingDeleteBookPlanId === activeBookPlan.id ? (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                    transition={{ duration: 0.16, ease: 'easeOut' }}
+                    className="absolute right-0 top-0 z-40 w-52 rounded-2xl border border-white/10 bg-slate-950/88 p-3 text-left shadow-[0_18px_50px_rgba(15,23,42,0.28)] backdrop-blur-xl"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <p className="text-[12px] font-medium leading-relaxed text-white/90">
+                      {deleteBookPlanConfirmText}
+                    </p>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        type="button"
+                        disabled={isDeletingBookPlan}
+                        className="flex-1 rounded-lg bg-white/10 px-3 py-1.5 text-[12px] font-medium text-white/80 transition-colors hover:bg-white/18 disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={() => setPendingDeleteBookPlanId(null)}
+                      >
+                        {t('common.cancel')}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isDeletingBookPlan}
+                        className="flex-1 rounded-lg bg-red-500/90 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-70"
+                        onClick={() => void confirmDeleteBookPlan(activeBookPlan.id)}
+                      >
+                        {isDeletingBookPlan ? deletingBookPlanLabel : t('classroom.delete')}
+                      </button>
+                    </div>
+                  </motion.div>
+                ) : (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="absolute right-0 top-0 size-8 rounded-full bg-black/30 text-white shadow-sm backdrop-blur-sm transition-colors hover:bg-destructive/80 hover:text-white"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPendingDeleteBookPlanId(activeBookPlan.id);
+                    }}
+                    title={deleteBookPlanLabel}
+                    aria-label={deleteBookPlanLabel}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                )}
+                <AnimatePresence>
+                  {bookShelfOpen && bookPlans.length > 1 && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                      transition={{ duration: 0.16, ease: 'easeOut' }}
+                      className="absolute left-1/2 top-full z-50 mt-3 max-h-[min(46vh,360px)] w-[min(90vw,360px)] -translate-x-1/2 overflow-y-auto rounded-2xl border border-white/70 bg-white/92 p-2 text-left shadow-[0_22px_70px_rgba(88,76,120,0.18)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/88"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center justify-between px-2 py-1.5">
+                        <div className="text-xs font-semibold text-slate-700 dark:text-slate-100">
+                          {locale === 'zh-CN' ? '书本计划' : 'Book Plans'}
+                        </div>
+                        <div className="text-[11px] text-slate-400">{bookPlans.length}</div>
+                      </div>
+                      <div className="mt-1 space-y-1">
+                        {bookPlans.map((plan) => {
+                          const progress = getBookPlanProgress(plan);
+                          const selected = plan.id === activeBookPlan.id;
+                          return (
+                            <button
+                              key={plan.id}
+                              type="button"
+                              onClick={() => handleSelectBookPlan(plan)}
+                              className={cn(
+                                'flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors',
+                                selected
+                                  ? 'bg-violet-100/80 text-slate-900 dark:bg-violet-400/18 dark:text-white'
+                                  : 'hover:bg-slate-100/80 dark:hover:bg-white/8',
+                              )}
+                            >
+                              <div className="relative h-12 w-9 shrink-0 overflow-hidden rounded bg-slate-100 shadow-sm ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10">
+                                {plan.coverImage ? (
+                                  <img
+                                    src={plan.coverImage}
+                                    alt=""
+                                    className="h-full w-full object-cover"
+                                    draggable={false}
+                                  />
+                                ) : (
+                                  <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(145deg,#f8fafc_0%,#e9d5ff_55%,#dbeafe_100%)] dark:bg-[linear-gradient(145deg,#1e293b_0%,#4c1d95_58%,#172554_100%)]">
+                                    <BookOpen className="size-4 text-violet-500/75 dark:text-violet-200/75" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-xs font-semibold text-slate-700 dark:text-slate-100">
+                                  {plan.title}
+                                </div>
+                                <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                                  <span className="tabular-nums">
+                                    {progress.completedLessons}/{plan.totalLessons}
+                                  </span>
+                                  <div className="h-1 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+                                    <div
+                                      className="h-full rounded-full bg-violet-500"
+                                      style={{ width: `${progress.progressPercent}%` }}
+                                    />
+                                  </div>
+                                  <span className="tabular-nums">{progress.progressPercent}%</span>
+                                </div>
+                                <div className="mt-0.5 truncate text-[10px] text-slate-400">
+                                  {progress.currentLesson
+                                    ? `Lesson ${progress.currentLesson.order}: ${progress.currentLesson.title}`
+                                    : plan.fileName}
+                                </div>
+                              </div>
+                              {selected && <Check className="size-4 shrink-0 text-violet-500" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
-            </div>
+            )}
+          </div>
 
-            {/* Textarea */}
-            <textarea
-              ref={textareaRef}
-              placeholder={t('upload.requirementPlaceholder')}
-              className="w-full resize-none border-0 bg-transparent px-4 pt-1 pb-2 text-[13px] leading-relaxed placeholder:text-muted-foreground/40 focus:outline-none min-h-[140px] max-h-[300px]"
-              value={form.requirement}
-              onChange={(e) => updateForm('requirement', e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={4}
-            />
-
-            {/* Toolbar row */}
-            <div className="px-3 pb-3 flex items-end gap-2">
-              <div className="flex-1 min-w-0">
-                <GenerationToolbar
-                  language={form.language}
-                  onLanguageChange={(lang) => updateForm('language', lang)}
-                  webSearch={form.webSearch}
-                  onWebSearchChange={(v) => updateForm('webSearch', v)}
-                  onSettingsOpen={(section) => {
-                    setSettingsSection(section);
-                    setSettingsOpen(true);
-                  }}
-                  pdfFile={form.pdfFile}
-                  onPdfFileChange={(f) => updateForm('pdfFile', f)}
-                  onPdfError={setError}
-                />
+          {/* ── Unified input area ── */}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.97 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.35 }}
+            className="w-full"
+          >
+            <div
+              className="w-full rounded-[28px] border border-border/60 bg-card/90 shadow-[0_28px_90px_rgba(var(--app-shadow-rgb),0.18),0_8px_26px_rgba(var(--app-shadow-rgb),0.08)] backdrop-blur-xl transition-shadow focus-within:shadow-[0_34px_110px_rgba(var(--app-shadow-rgb),0.22),0_10px_32px_rgba(var(--app-shadow-rgb),0.10)]"
+              style={{ background: 'var(--app-surface-strong)' }}
+            >
+              {/* ── Greeting + Profile + Agents ── */}
+              <div className="relative z-20 flex items-start justify-between">
+                <GreetingBar />
+                <div className="pr-3 pt-3.5 shrink-0">
+                  <AgentBar />
+                </div>
               </div>
 
-              {/* Voice input */}
-              <SpeechButton
-                size="md"
-                onTranscription={(text) => {
-                  setForm((prev) => {
-                    const next = prev.requirement + (prev.requirement ? ' ' : '') + text;
-                    updateRequirementCache(next);
-                    return { ...prev, requirement: next };
-                  });
-                }}
+              {/* Textarea */}
+              <textarea
+                ref={textareaRef}
+                placeholder=""
+                className="w-full min-h-[92px] max-h-[190px] resize-none border-0 bg-transparent px-5 pt-2 pb-3 text-[15px] leading-relaxed text-foreground placeholder:text-muted-foreground/80 focus:outline-none md:min-h-[104px]"
+                value={form.requirement}
+                onChange={(e) => updateForm('requirement', e.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={3}
               />
 
-              {/* Send button */}
-              <button
-                onClick={handleGenerate}
-                disabled={!canGenerate}
-                className={cn(
-                  'shrink-0 h-8 rounded-lg flex items-center justify-center gap-1.5 transition-all px-3',
-                  canGenerate
-                    ? 'bg-primary text-primary-foreground hover:opacity-90 shadow-sm cursor-pointer'
-                    : 'bg-muted text-muted-foreground/40 cursor-not-allowed',
-                )}
-              >
-                <span className="text-xs font-medium">{t('toolbar.enterClassroom')}</span>
-                <ArrowUp className="size-3.5" />
-              </button>
-            </div>
-          </div>
-        </motion.div>
+              {/* Toolbar row */}
+              <div className="flex items-end gap-2 px-4 pb-4">
+                <div className="flex-1 min-w-0">
+                  <GenerationToolbar
+                    language={form.language}
+                    onLanguageChange={(lang) => updateForm('language', lang)}
+                    onSettingsOpen={(section) => {
+                      setSettingsSection(section);
+                      setSettingsOpen(true);
+                    }}
+                    pdfFile={form.pdfFile}
+                    onPdfFileChange={(f) => updateForm('pdfFile', f)}
+                    onPdfError={setError}
+                  />
+                </div>
 
-        {/* ── Error ── */}
-        <AnimatePresence>
-          {error && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="mt-3 w-full p-3 bg-destructive/10 border border-destructive/20 rounded-lg"
-            >
-              <p className="text-sm text-destructive">{error}</p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </motion.div>
+                {/* Voice input */}
+                <SpeechButton
+                  size="md"
+                  onTranscription={(text) => {
+                    setForm((prev) => {
+                      const next = prev.requirement + (prev.requirement ? ' ' : '') + text;
+                      updateRequirementCache(next);
+                      return { ...prev, requirement: next };
+                    });
+                  }}
+                />
+
+                {/* Send button */}
+                <button
+                  onClick={() => {
+                    if (canCreateBookPlan) {
+                      createBookLearningPlan();
+                    } else if (canStartBookLesson) {
+                      handleBookLessonStart();
+                    } else if (canStartBookPractice) {
+                      handleBookPracticeStart();
+                    } else {
+                      handleGenerate();
+                    }
+                  }}
+                  disabled={!primaryActionEnabled && !canStartBookLesson && !canStartBookPractice}
+                  className={cn(
+                    'shrink-0 h-9 rounded-full flex items-center justify-center gap-1.5 transition-all px-4 shadow-sm',
+                    primaryActionEnabled || canStartBookLesson || canStartBookPractice
+                      ? 'bg-primary text-primary-foreground hover:shadow-[0_12px_30px_rgba(var(--app-shadow-rgb),0.24)] hover:brightness-[1.03] cursor-pointer'
+                      : 'bg-muted text-muted-foreground/60 cursor-not-allowed',
+                  )}
+                >
+                  <span className="text-sm font-medium">
+                    {isCreatingBookPlan
+                      ? 'Planning...'
+                      : form.pdfFile
+                        ? 'Create Plan'
+                        : canStartBookLesson
+                          ? bookLessonActionLabel
+                          : canStartBookPractice
+                            ? bookLessonActionLabel
+                            : !form.requirement.trim() && !form.pdfFile && bookLessonActionLabel
+                              ? bookLessonActionLabel
+                              : t('toolbar.enterClassroom')}
+                  </span>
+                  <ArrowUp className="size-3.5" />
+                </button>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* ── Error ── */}
+          <AnimatePresence>
+            {error && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="mt-3 w-full p-3 bg-destructive/10 border border-destructive/20 rounded-lg"
+              >
+                <p className="text-sm text-destructive">{error}</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      </div>
 
       {/* ═══ Recent classrooms — collapsible ═══ */}
       {classrooms.length > 0 && (
@@ -565,7 +1416,7 @@ function HomePage() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.5 }}
-          className="relative z-10 mt-10 w-full max-w-6xl flex flex-col items-center"
+          className="absolute inset-x-4 bottom-9 z-10 mx-auto flex max-h-[32dvh] max-w-6xl flex-col items-center overflow-hidden"
         >
           {/* Trigger — divider-line with centered text */}
           <button
@@ -626,7 +1477,9 @@ function HomePage() {
                         confirmingDelete={pendingDeleteId === classroom.id}
                         onConfirmDelete={() => confirmDelete(classroom.id)}
                         onCancelDelete={() => setPendingDeleteId(null)}
-                        onClick={() => router.push(`/classroom/${classroom.id}`)}
+                        onOpenIntent={() => prefetchClassroom(classroom.id)}
+                        onClick={() => openClassroom(classroom.id)}
+                        isOpening={openingClassroomId === classroom.id}
                       />
                     </motion.div>
                   ))}
@@ -636,11 +1489,6 @@ function HomePage() {
           </AnimatePresence>
         </motion.div>
       )}
-
-      {/* Footer — flows with content, at the very end */}
-      <div className="mt-auto pt-12 pb-4 text-center text-xs text-muted-foreground/40">
-        OpenMAIC Open Source Project
-      </div>
     </div>
   );
 }
@@ -940,7 +1788,9 @@ function ClassroomCard({
   confirmingDelete,
   onConfirmDelete,
   onCancelDelete,
+  onOpenIntent,
   onClick,
+  isOpening,
 }: {
   classroom: StageListItem;
   slide?: Slide;
@@ -950,7 +1800,9 @@ function ClassroomCard({
   confirmingDelete: boolean;
   onConfirmDelete: () => void;
   onCancelDelete: () => void;
+  onOpenIntent: () => void;
   onClick: () => void;
+  isOpening: boolean;
 }) {
   const { t } = useI18n();
   const thumbRef = useRef<HTMLDivElement>(null);
@@ -989,7 +1841,25 @@ function ClassroomCard({
   };
 
   return (
-    <div className="group cursor-pointer" onClick={confirmingDelete ? undefined : onClick}>
+    <div
+      role="button"
+      tabIndex={editing ? -1 : 0}
+      className={cn(
+        'group cursor-pointer outline-none',
+        isOpening && 'pointer-events-none opacity-80',
+      )}
+      onPointerEnter={onOpenIntent}
+      onFocus={onOpenIntent}
+      onClick={confirmingDelete || editing ? undefined : onClick}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (confirmingDelete || editing) return;
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        onClick();
+      }}
+      aria-busy={isOpening}
+    >
       {/* Thumbnail — large radius, no border, subtle bg */}
       <div
         ref={thumbRef}
@@ -1009,6 +1879,14 @@ function ClassroomCard({
             </div>
           </div>
         ) : null}
+
+        {isOpening && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/22 backdrop-blur-[2px]">
+            <div className="flex size-10 items-center justify-center rounded-full bg-white/90 text-violet-600 shadow-lg dark:bg-slate-950/90 dark:text-violet-300">
+              <Loader2 className="size-5 animate-spin" />
+            </div>
+          </div>
+        )}
 
         {/* Delete — top-right, only on hover */}
         <AnimatePresence>

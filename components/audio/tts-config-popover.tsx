@@ -40,8 +40,14 @@ export function TtsConfigPopover() {
   const ttsSpeed = useSettingsStore((s) => s.ttsSpeed);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const setTTSVoice = useSettingsStore((s) => s.setTTSVoice);
+  const providerConfig = ttsProvidersConfig[ttsProviderId];
+  const compatibleProviderId = providerConfig?.compatibleProviderId || ttsProviderId;
 
-  const voices = getTTSVoices(ttsProviderId);
+  const voices = getTTSVoices(
+    compatibleProviderId,
+    providerConfig?.modelId,
+    providerConfig?.providerOptions,
+  );
   const localizedVoices = useMemo(
     () =>
       voices.map((v) => ({
@@ -60,15 +66,16 @@ export function TtsConfigPopover() {
       return;
     }
     try {
-      const providerConfig = ttsProvidersConfig[ttsProviderId];
       await startPreview({
         text: t('settings.ttsTestTextDefault'),
         providerId: ttsProviderId,
+        compatibleProviderId,
         modelId: providerConfig?.modelId,
         voice: ttsVoice,
         speed: ttsSpeed,
         apiKey: providerConfig?.apiKey,
         baseUrl: providerConfig?.baseUrl,
+        providerOptions: providerConfig?.providerOptions,
       });
     } catch (error) {
       const message =
@@ -80,8 +87,9 @@ export function TtsConfigPopover() {
     startPreview,
     stopPreview,
     t,
+    compatibleProviderId,
+    providerConfig,
     ttsProviderId,
-    ttsProvidersConfig,
     ttsSpeed,
     ttsVoice,
   ]);

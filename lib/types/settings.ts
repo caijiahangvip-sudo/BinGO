@@ -2,13 +2,14 @@ import type { ProviderId, ModelInfo, ProviderType } from '@/lib/types/provider';
 
 export type SettingsSection =
   | 'general'
+  | 'built-in-providers'
   | 'providers'
+  | 'lightweight-providers'
   | 'agents'
   | 'tts'
   | 'asr'
   | 'pdf'
-  | 'image'
-  | 'video'
+  | 'vector'
   | 'web-search';
 
 /**
@@ -21,6 +22,7 @@ export interface ProviderSettings {
   apiKey: string;
   baseUrl: string;
   models: ModelInfo[]; // All models (user can edit/delete any)
+  modelsCustomized?: boolean; // True once user edits/deletes/adds models; prevents refresh from restoring defaults
 
   // Metadata (same for built-in and custom providers)
   name: string;

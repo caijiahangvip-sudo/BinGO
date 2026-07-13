@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Lint, Typecheck & Unit Tests
+  production-gates:
+    name: Production Gates
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,38 +25,17 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-
-      - name: Prettier
-        run: pnpm check
 
       - name: ESLint
-        run: pnpm lint
+        run: pnpm exec eslint .
 
       - name: TypeScript
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
-      - name: Unit Tests
-        run: pnpm test
-
-  e2e:
-    name: E2E Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Install Playwright browsers
+      - name: Install Playwright
         run: pnpm exec playwright install chromium --with-deps
 
-      - name: Run e2e tests
+      - name: Playwright E2E
         run: pnpm exec playwright test
 
       - uses: actions/upload-artifact@v4

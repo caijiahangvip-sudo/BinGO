@@ -17,11 +17,19 @@ import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
 import { createLogger } from '@/lib/logger';
-
-const log = createLogger('QuizView');
+import { useStageStore } from '@/lib/store';
+import {
+  LOCAL_STUDENT_ID,
+  saveLearningEvidenceRecords,
+} from '@/lib/utils/learning-profile-storage';
 import type { QuizQuestion } from '@/lib/types/stage';
 import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/components/audio/speech-button';
+import { IntersectingLinesBoard } from '@/components/quiz/geometry/intersecting-lines-board';
+import { resolveQuizDiagram } from '@/lib/quiz/diagrams';
+import { getIntersectingLinesGeometry } from '@/lib/quiz/intersecting-lines-geometry';
+
+const log = createLogger('QuizView');
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -136,6 +144,28 @@ async function gradeShortAnswerQuestion(
 }
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
+
+function IntersectingLinesDiagram({ question }: { readonly question: QuizQuestion }) {
+  const diagram = resolveQuizDiagram(question);
+  if (!diagram || diagram.type !== 'intersecting_lines') return null;
+
+  const points = {
+    ...diagram.points,
+  };
+  const geometry = getIntersectingLinesGeometry(points);
+  const ariaLabel = diagram.caption || 'Intersecting lines diagram';
+
+  return (
+    <div className="my-3 w-full max-w-[430px] rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+      <IntersectingLinesBoard geometry={geometry} ariaLabel={ariaLabel} />
+      {diagram.caption && (
+        <p className="mt-1 text-center text-xs text-gray-500 dark:text-gray-400">
+          {diagram.caption}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function QuizCover({
   questionCount,
@@ -556,6 +586,7 @@ function QuestionCard({
             <p className="text-sm font-medium text-gray-800 dark:text-gray-100 leading-relaxed">
               {question.question}
             </p>
+            <IntersectingLinesDiagram question={question} />
             <p className="text-xs text-gray-400 mt-0.5">
               {question.type === 'single'
                 ? t('quiz.singleChoice')
@@ -687,9 +718,14 @@ function ScoreBanner({
 
 export function QuizView({ questions, sceneId }: QuizViewProps) {
   const { t, locale } = useI18n();
+  const stage = useStageStore((s) => s.stage);
+  const sceneLearningContext = useStageStore(
+    (s) => s.scenes.find((scene) => scene.id === sceneId)?.learningContext,
+  );
   const [phase, setPhase] = useState<Phase>('not_started');
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [results, setResults] = useState<QuestionResult[]>([]);
+  const persistedEvidenceKeyRef = useRef<string | null>(null);
 
   // Draft cache for quiz answers, keyed by sceneId to isolate across classrooms
   const {
@@ -792,6 +828,70 @@ export function QuizView({ questions, sceneId }: QuizViewProps) {
     });
     return map;
   }, [results]);
+
+  useEffect(() => {
+    const bookLessonContext = stage?.bookLessonContext;
+    if (
+      phase !== 'reviewing' ||
+      !stage?.id ||
+      !bookLessonContext ||
+      questions.length === 0 ||
+      results.length === 0
+    ) {
+      return;
+    }
+
+    const evidenceKey = `${stage.id}:${sceneId}:${results
+      .map((result) => `${result.questionId}:${result.earned}:${result.status}`)
+      .join('|')}`;
+    if (persistedEvidenceKeyRef.current === evidenceKey) return;
+    persistedEvidenceKeyRef.current = evidenceKey;
+
+    const now = Date.now();
+    const knowledgePointIds =
+      sceneLearningContext?.knowledgePointIds && sceneLearningContext.knowledgePointIds.length > 0
+        ? sceneLearningContext.knowledgePointIds
+        : bookLessonContext.knowledgePointIds || [];
+    const evidence = questions.map((question) => {
+      const result = resultMap[question.id];
+      const answer = answers[question.id];
+      const response = Array.isArray(answer) ? answer.join(', ') : (answer ?? '');
+      const maxScore = question.points ?? 1;
+      const normalizedScore =
+        result && maxScore > 0 ? Math.max(0, Math.min(1, result.earned / maxScore)) : undefined;
+
+      return {
+        id: `quiz:${stage.id}:${sceneId}:${question.id}`,
+        studentId: LOCAL_STUDENT_ID,
+        planId: bookLessonContext.planId,
+        lessonId: bookLessonContext.lessonId,
+        stageId: stage.id,
+        sceneId,
+        sourceType: 'quiz' as const,
+        knowledgePointIds,
+        prompt: question.question,
+        response,
+        correct: result?.correct,
+        earnedScore: result?.earned,
+        maxScore,
+        normalizedScore,
+        aiComment: result?.aiComment,
+        createdAt: now,
+        updatedAt: now,
+        metadata: {
+          questionType: question.type,
+          answer: question.answer,
+          analysis: question.analysis,
+          section: sceneLearningContext?.section || 'lesson',
+        },
+      };
+    });
+
+    void saveLearningEvidenceRecords(evidence).catch((error) => {
+      persistedEvidenceKeyRef.current = null;
+      log.error('[quiz-view] Failed to persist quiz evidence:', error);
+    });
+  }, [answers, phase, questions, resultMap, results, sceneId, sceneLearningContext, stage]);
 
   return (
     <div className="w-full h-full bg-gradient-to-b from-gray-50 to-white dark:from-gray-900 dark:to-gray-900 overflow-hidden flex flex-col">
