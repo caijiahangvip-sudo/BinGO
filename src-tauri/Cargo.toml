@@ -1,6 +1,6 @@
 [package]
 name = "bingo"
-version = "0.1.4"
+version = "0.2.0"
 description = "BinGO AI interactive classroom desktop client"
 authors = ["BinGO contributors"]
 license = "AGPL-3.0"
@@ -21,6 +21,7 @@ tauri-build = { version = "2.5.6", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
+getrandom = "0.3"
 tauri = { version = "2.11.1", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-http = "2.5.8"
@@ -31,4 +32,4 @@ tauri-plugin-updater = { version = "2", default-features = false, features = ["n
 tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Networking_WinHttp", "Win32_Security_Credentials", "Win32_System_JobObjects", "Win32_System_Threading"] }

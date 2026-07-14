@@ -2,6 +2,7 @@ import { execFile, spawn } from 'child_process';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
+import { ensureOptionalChineseXinhuaData, getChineseXinhuaDataRoots } from '@/lib/server/chinese-xinhua-data';
 import { promisify } from 'util';
 import { createLogger } from '@/lib/logger';
 
@@ -629,21 +630,24 @@ function buildWslNativeStartCommand(service: LocalModelServiceId, port: number):
         '"$VENV_PY" scripts/mineru_patch_gpu.py',
         'echo "MinerU ROCm/runtime probe:"',
         '"$VENV_PY" scripts/mineru_gpu_check.py',
-        `exec "$VENV_PY" -m mineru.cli.fast_api --host 0.0.0.0 --port ${port}`,
+        `exec "$VENV_PY" -m mineru.cli.fast_api --host 127.0.0.1 --port ${port}`,
       );
       break;
-    case 'embedding':
+    case 'embedding': {
+      const dictionaryRoots = getChineseXinhuaDataRoots();
       lines.push(
         'export BINGO_REQUIRE_ROCM=1',
         `export BINGO_EMBEDDING_MODEL=${shellSingleQuoted(runtime.modelId || 'BAAI/bge-base-zh-v1.5')}`,
         `export BINGO_EMBEDDING_PORT=${port}`,
-        `export BINGO_CHINESE_XINHUA_DATA=${shellSingleQuoted(path.join(process.cwd(), 'data/chinese-xinhua/data'))}`,
+        `export BINGO_CHINESE_XINHUA_DATA=${shellSingleQuoted(dictionaryRoots.runtime || dictionaryRoots.packaged)}`,
+        `export BINGO_CHINESE_XINHUA_FALLBACK_DATA=${shellSingleQuoted(dictionaryRoots.packaged)}`,
         'export BINGO_CHINESE_XINHUA_INDEX="$RUNTIME_ROOT/data/chinese-xinhua-index"',
         'export TRANSFORMERS_CACHE="$HF_HOME"',
         'mkdir -p "$BINGO_CHINESE_XINHUA_INDEX"',
-        `exec "$VENV_PY" -m uvicorn scripts.chinese_xinhua_embedding_server:app --host 0.0.0.0 --port ${port}`,
+        `exec "$VENV_PY" -m uvicorn scripts.chinese_xinhua_embedding_server:app --host 127.0.0.1 --port ${port}`,
       );
       break;
+    }
   }
 
   return `${lines.join('\n')}\n`;
@@ -919,6 +923,7 @@ export async function ensureLocalModelServiceRunning(
   service: LocalModelServiceId,
   options: EnsureLocalModelServiceOptions = {},
 ): Promise<EnsureLocalModelServiceResult> {
+  if (service === 'embedding') await ensureOptionalChineseXinhuaData();
   const definition = serviceDefinitions[service];
   const port = options.port ?? definition.defaultPort;
   const timeoutMs = getStartTimeoutMs(options.timeoutMs);
@@ -964,6 +969,7 @@ export async function startLocalModelService(
   service: LocalModelServiceId,
   options: EnsureLocalModelServiceOptions = {},
 ): Promise<EnsureLocalModelServiceResult> {
+  if (service === 'embedding') await ensureOptionalChineseXinhuaData();
   const definition = serviceDefinitions[service];
   const port = options.port ?? definition.defaultPort;
   const timeoutMs = getStartTimeoutMs(options.timeoutMs);

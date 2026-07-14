@@ -7,3 +7,13 @@ commands.allow = ["desktop_system_proxy"]
 identifier = "allow-start-bingo-server"
 description = "Allows the BinGO desktop window to start its bundled local server."
 commands.allow = ["start_bingo_server"]
+
+[[permission]]
+identifier = "allow-desktop-secrets"
+description = "Allows the BinGO desktop window to store provider API keys in Windows Credential Manager."
+commands.allow = ["desktop_secret_read", "desktop_secret_write", "desktop_secret_delete"]
+
+[[permission]]
+identifier = "allow-desktop-runtime-status"
+description = "Allows the BinGO desktop window to inspect its local runtime and open the log folder."
+commands.allow = ["desktop_runtime_status", "desktop_open_log_dir"]

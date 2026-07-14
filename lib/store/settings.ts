@@ -55,6 +55,8 @@ export interface ManagedServiceProviderConfig<TCompatibleProviderId extends stri
 }
 
 export interface SettingsState {
+  secretsHydrated: boolean;
+  secretMigrationError: string | null;
   // Model selection
   providerId: ProviderId;
   modelId: string;
@@ -207,6 +209,31 @@ export interface SettingsState {
 
   // Server provider actions
   fetchServerProviders: () => Promise<void>;
+  setSecretHydrationState: (hydrated: boolean, error?: string | null) => void;
+}
+
+export function redactApiKeys<T extends Record<string, { apiKey?: string }>>(config: T): T {
+  return Object.fromEntries(
+    Object.entries(config).map(([providerId, providerConfig]) => [
+      providerId,
+      { ...providerConfig, apiKey: '' },
+    ]),
+  ) as T;
+}
+
+export function sanitizePersistedSettings(state: SettingsState): SettingsState {
+  return {
+    ...state,
+    secretsHydrated: false,
+    secretMigrationError: null,
+    providersConfig: redactApiKeys(state.providersConfig),
+    lightweightProvidersConfig: redactApiKeys(state.lightweightProvidersConfig),
+    ttsProvidersConfig: redactApiKeys(state.ttsProvidersConfig),
+    asrProvidersConfig: redactApiKeys(state.asrProvidersConfig),
+    pdfProvidersConfig: redactApiKeys(state.pdfProvidersConfig),
+    vectorProvidersConfig: redactApiKeys(state.vectorProvidersConfig),
+    webSearchProvidersConfig: redactApiKeys(state.webSearchProvidersConfig),
+  };
 }
 
 // Initialize default providers config
@@ -928,6 +955,8 @@ export const useSettingsStore = create<SettingsState>()(
       );
 
       return {
+        secretsHydrated: false,
+        secretMigrationError: null,
         // Initial state (use migrated data if available)
         providerId: migratedData?.providerId || 'openai',
         modelId: migratedData?.modelId || '',
@@ -1855,11 +1884,14 @@ export const useSettingsStore = create<SettingsState>()(
             log.warn('Failed to fetch server providers:', e);
           }
         },
+        setSecretHydrationState: (secretsHydrated, secretMigrationError = null) =>
+          set({ secretsHydrated, secretMigrationError }),
       };
     },
     {
       name: 'settings-storage',
       version: 3,
+      partialize: sanitizePersistedSettings,
       // Migrate persisted state
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as Partial<SettingsState>;

@@ -1,6 +1,11 @@
 ﻿import fs from 'fs';
-import path from 'path';
+import { gunzipSync } from 'node:zlib';
 import { semanticSearchChineseXinhua } from '@/lib/server/chinese-xinhua-embedding';
+import {
+  ensureOptionalChineseXinhuaData,
+  getChineseXinhuaDataRoots,
+  resolveChineseXinhuaDataFile,
+} from '@/lib/server/chinese-xinhua-data';
 
 export type ChineseXinhuaEntryType = 'character' | 'word' | 'idiom' | 'xiehouyu';
 
@@ -66,8 +71,6 @@ interface ChineseXinhuaIndex {
   xiehouyu: Map<string, ChineseXinhuaEntry[]>;
 }
 
-const DATA_ROOT = path.join(process.cwd(), 'data', 'chinese-xinhua', 'data');
-const SOURCE_ROOT = path.join(process.cwd(), 'data', 'chinese-xinhua');
 const MAX_QUERY_CHARS = 160;
 const DEFAULT_LIMIT = 12;
 const LEXICON_TRIGGER_PATTERN =
@@ -76,9 +79,11 @@ const LEXICON_TRIGGER_PATTERN =
 let cachedIndex: ChineseXinhuaIndex | null = null;
 
 function readJsonArray<T>(fileName: string): T[] {
-  const filePath = path.join(DATA_ROOT, fileName);
-  if (!fs.existsSync(filePath)) return [];
-  const raw = fs.readFileSync(filePath, 'utf8');
+  const filePath = resolveChineseXinhuaDataFile(fileName);
+  if (!filePath) return [];
+  const raw = filePath.endsWith('.gz')
+    ? gunzipSync(fs.readFileSync(filePath)).toString('utf8')
+    : fs.readFileSync(filePath, 'utf8');
   const parsed = JSON.parse(raw) as unknown;
   return Array.isArray(parsed) ? (parsed as T[]) : [];
 }
@@ -260,16 +265,16 @@ export function shouldUseChineseXinhuaContext(text: string, language?: string): 
 
 export function getChineseXinhuaStatus() {
   const files = ['word.json', 'ci.json', 'idiom.json', 'xiehouyu.json'].map((file) => {
-    const filePath = path.join(DATA_ROOT, file);
+    const resolvedPath = resolveChineseXinhuaDataFile(file);
     return {
       file,
-      exists: fs.existsSync(filePath),
-      bytes: fs.existsSync(filePath) ? fs.statSync(filePath).size : 0,
+      exists: !!resolvedPath,
+      bytes: resolvedPath ? fs.statSync(resolvedPath).size : 0,
     };
   });
 
   return {
-    dataRoot: SOURCE_ROOT,
+    dataRoot: getChineseXinhuaDataRoots(),
     ready: files.every((file) => file.exists),
     files,
   };
@@ -279,6 +284,7 @@ export async function searchChineseXinhua(
   query: string,
   options: ChineseXinhuaSearchOptions = {},
 ): Promise<ChineseXinhuaSearchResult> {
+  await ensureOptionalChineseXinhuaData();
   const cleanQuery = query.trim();
   const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_LIMIT, 30));
   const entries = searchStructured(cleanQuery, limit);

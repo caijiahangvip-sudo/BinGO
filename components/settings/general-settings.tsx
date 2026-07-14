@@ -23,6 +23,7 @@ import { useSettingsStore } from '@/lib/store/settings';
 import { toast } from 'sonner';
 import { createLogger } from '@/lib/logger';
 import { LocalRuntimeDiagnostics } from './local-runtime-diagnostics';
+import { DesktopUpdateSettings } from './desktop-update-settings';
 
 const log = createLogger('GeneralSettings');
 const BACKUP_FILENAME = 'bingo-user-backup.zip';
@@ -205,6 +206,7 @@ export function GeneralSettings() {
       />
 
       <LocalRuntimeDiagnostics chinese={locale === 'zh-CN'} />
+      <DesktopUpdateSettings />
 
       <div className="rounded-xl border border-border bg-card">
         <div className="p-4 space-y-4">

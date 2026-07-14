@@ -12,8 +12,13 @@ import { createLogger } from '@/lib/logger';
 const log = createLogger('LocalBackup');
 
 const BACKUP_MAGIC = 'bingo-local-backup';
-const BACKUP_FORMAT_VERSION = 1;
+const BACKUP_FORMAT_VERSION = 2;
 const STORAGE_DECISION_KEY_PREFIX = 'bingo.localSeed.';
+const MAX_BACKUP_FILE_BYTES = 1024 * 1024 * 1024;
+const MAX_BACKUP_ENTRIES = 10_000;
+const MAX_BACKUP_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_BACKUP_COMPRESSION_RATIO = 100;
+const MAX_TABLE_RECORDS = 100_000;
 
 const TABLE_BLOB_FIELDS = {
   stages: [],
@@ -53,6 +58,7 @@ export interface LocalBackupManifest {
     }
   >;
   localStorageEntries: number;
+  secretsExcluded: true;
 }
 
 interface BlobPointer {
@@ -87,6 +93,25 @@ function shouldSkipStorageKey(key: string): boolean {
   return key.startsWith(STORAGE_DECISION_KEY_PREFIX);
 }
 
+export function redactSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (typeof value !== 'object' || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key.toLowerCase() === 'apikey' ? '' : redactSecrets(entry),
+    ]),
+  );
+}
+
+export function sanitizeStorageValue(value: string): string {
+  try {
+    return JSON.stringify(redactSecrets(JSON.parse(value)));
+  } catch {
+    return value;
+  }
+}
+
 function readStorageSnapshot(storage: Storage): StorageSnapshot {
   const snapshot: StorageSnapshot = {};
   for (let index = 0; index < storage.length; index += 1) {
@@ -94,7 +119,7 @@ function readStorageSnapshot(storage: Storage): StorageSnapshot {
     if (!key || shouldSkipStorageKey(key)) continue;
     const value = storage.getItem(key);
     if (value !== null) {
-      snapshot[key] = value;
+      snapshot[key] = sanitizeStorageValue(value);
     }
   }
   return snapshot;
@@ -103,8 +128,30 @@ function readStorageSnapshot(storage: Storage): StorageSnapshot {
 function restoreStorageSnapshot(storage: Storage, snapshot: StorageSnapshot): void {
   storage.clear();
   for (const [key, value] of Object.entries(snapshot)) {
-    storage.setItem(key, value);
+    storage.setItem(key, sanitizeStorageValue(value));
   }
+}
+
+export async function loadValidatedBackup(file: Blob): Promise<JSZip> {
+  if (file.size > MAX_BACKUP_FILE_BYTES) throw new Error('Backup file is too large.');
+  const zip = await JSZip.loadAsync(file);
+  const entries = Object.values(zip.files);
+  if (entries.length > MAX_BACKUP_ENTRIES) throw new Error('Backup contains too many files.');
+  let uncompressedBytes = 0;
+  let compressedBytes = 0;
+  for (const entry of entries) {
+    const data = (entry as unknown as { _data?: { uncompressedSize?: number; compressedSize?: number } })
+      ._data;
+    uncompressedBytes += data?.uncompressedSize || 0;
+    compressedBytes += data?.compressedSize || 0;
+  }
+  if (uncompressedBytes > MAX_BACKUP_UNCOMPRESSED_BYTES) {
+    throw new Error('Backup expands beyond the allowed size.');
+  }
+  if (compressedBytes > 0 && uncompressedBytes / compressedBytes > MAX_BACKUP_COMPRESSION_RATIO) {
+    throw new Error('Backup compression ratio is unsafe.');
+  }
+  return zip;
 }
 
 function isBrowserBlob(value: unknown): value is Blob {
@@ -165,6 +212,7 @@ async function importTable(
 
   const records = JSON.parse(await tableFile.async('text')) as SerializableRecord[];
   if (!Array.isArray(records) || records.length === 0) return;
+  if (records.length > MAX_TABLE_RECORDS) throw new Error(`Too many records in ${tableName}.`);
 
   const restoredRecords: SerializableRecord[] = [];
   for (const record of records) {
@@ -207,6 +255,7 @@ export async function exportLocalBackup(): Promise<LocalBackupExportResult> {
     origin: window.location.origin,
     tables: manifestTables,
     localStorageEntries: Object.keys(localStorageSnapshot).length,
+    secretsExcluded: true,
   };
 
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
@@ -221,7 +270,7 @@ export async function exportLocalBackup(): Promise<LocalBackupExportResult> {
 }
 
 export async function importLocalBackup(file: Blob): Promise<LocalBackupImportResult> {
-  const zip = await JSZip.loadAsync(file);
+  const zip = await loadValidatedBackup(file);
   const manifestFile = zip.file('manifest.json');
   if (!manifestFile) {
     throw new Error('Backup manifest is missing.');
@@ -258,7 +307,7 @@ export async function importLocalBackup(file: Blob): Promise<LocalBackupImportRe
 }
 
 export async function getLocalBackupPreview(file: Blob): Promise<LocalBackupManifest> {
-  const zip = await JSZip.loadAsync(file);
+  const zip = await loadValidatedBackup(file);
   const manifestFile = zip.file('manifest.json');
   if (!manifestFile) {
     throw new Error('Backup manifest is missing.');

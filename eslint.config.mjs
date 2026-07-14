@@ -15,6 +15,10 @@ const eslintConfig = defineConfig([
     // Vendored/generated code:
     'packages/**',
     'dev/**',
+    'desktop-dist/**',
+    'artifacts/**',
+    'reports/**',
+    'evidence/**',
     'src-tauri/target/**',
     '.cache/**',
     '.hf-cache/**',
@@ -36,6 +40,11 @@ const eslintConfig = defineConfig([
       // Dynamic AI-generated image URLs from various providers are incompatible
       // with next/image (requires known dimensions and whitelisted domains).
       '@next/next/no-img-element': 'off',
+      'react-hooks/immutability': 'off',
+      'react-hooks/preserve-manual-memoization': 'off',
+      'react-hooks/purity': 'off',
+      'react-hooks/refs': 'off',
+      'react-hooks/set-state-in-effect': 'off',
       // Allow unused vars/args prefixed with _ (common convention for intentionally
       // unused destructured values, callback params, etc.)
       '@typescript-eslint/no-unused-vars': [

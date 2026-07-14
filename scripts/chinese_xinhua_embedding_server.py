@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 import os
 import re
 import sqlite3
@@ -24,6 +25,7 @@ except Exception:  # pragma: no cover - reported by /health
 MODEL_ID = os.environ.get("BINGO_EMBEDDING_MODEL", "BAAI/bge-base-zh-v1.5")
 PORT = int(os.environ.get("BINGO_EMBEDDING_PORT", "50003"))
 DATA_ROOT = Path(os.environ.get("BINGO_CHINESE_XINHUA_DATA", "/mnt/c/Bingo/data/chinese-xinhua/data"))
+FALLBACK_DATA_ROOT = Path(os.environ.get("BINGO_CHINESE_XINHUA_FALLBACK_DATA", str(DATA_ROOT)))
 INDEX_ROOT = Path(os.environ.get("BINGO_CHINESE_XINHUA_INDEX", "/mnt/c/Bingo/runtime-data/chinese-xinhua-index"))
 TOP_K_DEFAULT = int(os.environ.get("BINGO_CHINESE_XINHUA_TOP_K", "8"))
 REQUIRE_ROCM = os.environ.get("BINGO_REQUIRE_ROCM", "1").strip().lower() not in {
@@ -61,9 +63,15 @@ def normalize_text(value: str) -> str:
 
 
 def read_json_array(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
+    candidates = [path, Path(f"{path}.gz")]
+    if DATA_ROOT != FALLBACK_DATA_ROOT:
+        fallback = FALLBACK_DATA_ROOT / path.name
+        candidates.extend([fallback, Path(f"{fallback}.gz")])
+    source_path = next((candidate for candidate in candidates if candidate.exists()), None)
+    if source_path is None:
         return []
-    with path.open("r", encoding="utf-8") as file:
+    opener = gzip.open if source_path.suffix == ".gz" else open
+    with opener(source_path, "rt", encoding="utf-8") as file:
         data = json.load(file)
     return data if isinstance(data, list) else []
 

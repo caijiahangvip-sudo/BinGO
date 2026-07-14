@@ -7,18 +7,20 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -41,10 +43,14 @@ jobs:
       - name: Quality checks
         run: |
           pnpm exec tsc --noEmit
-          pnpm exec eslint components/desktop-updater.tsx app/api/health/route.ts
+          pnpm exec eslint .
+          pnpm exec vitest run
+          pnpm audit --prod --audit-level moderate
+          $env:TAURI_CONFIG = '{"bundle":{"resources":[]}}'
+          cargo test --manifest-path src-tauri/Cargo.toml --jobs 1
 
       - name: Build and publish NSIS installer
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -56,3 +62,59 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --bundles nsis
+
+      - name: Validate package size and create release metadata
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $installers = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe
+          if (-not $installers) { throw "NSIS installer was not produced" }
+          foreach ($installer in $installers) {
+            if ($installer.Length -gt 60MB) { throw "Installer exceeds 60 MiB: $($installer.Length)" }
+          }
+          $resources = (Get-ChildItem desktop-dist,src-tauri/binaries/node.exe -Recurse -File | Measure-Object Length -Sum).Sum
+          if ($resources -gt 320MB) { throw "Installed resources exceed 320 MiB: $resources" }
+          Get-FileHash $installers.FullName -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } |
+            Set-Content artifacts/SHA256SUMS.txt
+          node scripts/generate-sbom.mjs artifacts/bingo-sbom.cdx.json
+          node scripts/generate-optional-data-assets.mjs artifacts
+          Get-FileHash artifacts/bingo-sbom.cdx.json,artifacts/chinese-xinhua-ci.json.gz -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } |
+            Add-Content artifacts/SHA256SUMS.txt
+          Copy-Item $installers.FullName artifacts/
+
+      - name: Smoke install desktop client
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem artifacts/*.exe | Select-Object -First 1
+          Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
+          $exe = Join-Path $env:LOCALAPPDATA 'BinGO\bingo.exe'
+          if (-not (Test-Path $exe)) { throw "Installed BinGO executable not found" }
+          $process = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 15
+          if ($process.HasExited) { throw "Installed BinGO exited during smoke test" }
+          Stop-Process -Id $process.Id -Force
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45
+        with:
+          subject-path: |
+            artifacts/*.exe
+            artifacts/SHA256SUMS.txt
+            artifacts/bingo-sbom.cdx.json
+            artifacts/chinese-xinhua-ci.json.gz
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bingo-windows-${{ github.ref_name }}
+          path: artifacts/*
+          if-no-files-found: error
+
+      - name: Upload release metadata
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" artifacts/SHA256SUMS.txt artifacts/bingo-sbom.cdx.json artifacts/chinese-xinhua-ci.json.gz --clobber

@@ -14,6 +14,8 @@
     "core:default",
     "allow-desktop-system-proxy",
     "allow-start-bingo-server",
+    "allow-desktop-secrets",
+    "allow-desktop-runtime-status",
     "process:allow-restart",
     "updater:default"
   ]

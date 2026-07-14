@@ -10,6 +10,8 @@ import { LocalSeedBootstrap } from '@/components/local-seed-bootstrap';
 import { getEmbeddedAppFontCss } from '@/lib/constants/fonts';
 import { getThemeInitScript } from '@/lib/theme/theme-runtime';
 import { DesktopUpdater } from '@/components/desktop-updater';
+import { DesktopSecretBootstrap } from '@/components/desktop-secret-bootstrap';
+import { DesktopRuntimeGate } from '@/components/desktop-runtime-gate';
 
 export const metadata: Metadata = {
   title: 'BinGo',
@@ -31,10 +33,13 @@ export default function RootLayout({
       <body className="antialiased" suppressHydrationWarning>
         <ThemeProvider>
           <I18nProvider>
-            <LocalSeedBootstrap />
-            <ServerProvidersInit />
-            {children}
-            <DesktopUpdater />
+            <DesktopRuntimeGate>
+              <LocalSeedBootstrap />
+              <ServerProvidersInit />
+              {children}
+              <DesktopSecretBootstrap />
+              <DesktopUpdater />
+            </DesktopRuntimeGate>
             <Toaster position="top-center" />
           </I18nProvider>
         </ThemeProvider>

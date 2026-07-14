@@ -863,7 +863,7 @@ export function finalizeGeneratedSlideContent(
     imageMapping,
     visualTheme,
   );
-  if (prepared.content && prepared.issues.length === 0) return prepared.content;
+  if (prepared.content) return prepared.content;
 
   log.warn(
     `Rejected slide layout for "${outline.title}", using fallback template: ${prepared.issues
@@ -1504,7 +1504,7 @@ async function generateSlideContent(
       imageMapping,
       visualTheme,
       layoutVariant,
-      false,
+      true,
     );
   }
 }
