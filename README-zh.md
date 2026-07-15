@@ -53,7 +53,7 @@ https://github.com/user-attachments/assets/dbd013f6-9fab-43c5-a788-b47126cff7a8
 
 - **Node.js** >= 20
 - **pnpm** >= 10
-- **WSL2 + 支持 ROCm 的 AMD GPU**：本地 CosyVoice、SenseVoice、MinerU 和中文词典 embedding 服务默认走 WSL2 ROCm。如果尚未安装 WSL，可先运行 `scripts/launch-install-wsl-rocm-admin.vbs`。
+- **WSL2 + 支持 ROCm 的 AMD GPU**：本地 CosyVoice、SenseVoice、MinerU 和中文词典 embedding 服务默认走 WSL2 ROCm。设置页会同时检测 Windows AMD 显卡与 WSL ROCm/HIP；未配置时可点击“配置 WSL + AMD ROCm”，或运行 `scripts/launch-install-wsl-rocm-admin.vbs`。安装脚本会以 WSL root 身份配置 ROCm，无需单独输入 Linux sudo 密码。
 
 ### 1. 克隆 & 安装
 

@@ -49,7 +49,7 @@ else {
 }
 
 $rocmWheelBaseUrl = if ([string]::IsNullOrWhiteSpace($env:BINGO_ROCM_WHEEL_BASE_URL)) {
-  "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.3.4"
+  "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2"
 }
 else {
   $env:BINGO_ROCM_WHEEL_BASE_URL.TrimEnd("/")
@@ -376,7 +376,7 @@ from urllib.parse import quote, urlparse, unquote
 from urllib.request import Request, urlopen
 
 wheel_suffix = f"cp{sys.version_info.major}{sys.version_info.minor}-cp{sys.version_info.major}{sys.version_info.minor}-linux_x86_64.whl"
-base_url = os.environ.get("ROCM_WHEEL_BASE_URL", "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.3.4").rstrip("/")
+base_url = os.environ.get("ROCM_WHEEL_BASE_URL", "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2").rstrip("/")
 cache_dir = Path(os.environ.get("ROCM_WHEEL_CACHE_DIR", "~/.cache/bingo/cache/rocm-wheels")).expanduser()
 cache_dir.mkdir(parents=True, exist_ok=True)
 shared_site_packages = Path(os.environ["SHARED_SITE_PACKAGES"]).expanduser()
@@ -390,16 +390,16 @@ def wheel_url(filename: str) -> str:
 
 wheel_sets = {
     "cp310-cp310-linux_x86_64.whl": [
-        wheel_url("torch-2.4.0+rocm6.3.4.git7cecbf6d-cp310-cp310-linux_x86_64.whl"),
-        wheel_url("torchvision-0.19.0+rocm6.3.4.gitfab84886-cp310-cp310-linux_x86_64.whl"),
-        wheel_url("torchaudio-2.4.0+rocm6.3.4.git69d40773-cp310-cp310-linux_x86_64.whl"),
-        wheel_url("pytorch_triton_rocm-3.0.0+rocm6.3.4.git75cc27c2-cp310-cp310-linux_x86_64.whl"),
+        wheel_url("torch-2.6.0+rocm6.4.2.git76481f7c-cp310-cp310-linux_x86_64.whl"),
+        wheel_url("torchvision-0.21.0+rocm6.4.2.git4040d51f-cp310-cp310-linux_x86_64.whl"),
+        wheel_url("torchaudio-2.6.0+rocm6.4.2.gitd8831425-cp310-cp310-linux_x86_64.whl"),
+        wheel_url("pytorch_triton_rocm-3.2.0+rocm6.4.2.git7e948ebf-cp310-cp310-linux_x86_64.whl"),
     ],
     "cp312-cp312-linux_x86_64.whl": [
-        wheel_url("torch-2.4.0+rocm6.3.4.git7cecbf6d-cp312-cp312-linux_x86_64.whl"),
-        wheel_url("torchvision-0.19.0+rocm6.3.4.gitfab84886-cp312-cp312-linux_x86_64.whl"),
-        wheel_url("torchaudio-2.4.0+rocm6.3.4.git69d40773-cp312-cp312-linux_x86_64.whl"),
-        wheel_url("pytorch_triton_rocm-3.0.0+rocm6.3.4.git75cc27c2-cp312-cp312-linux_x86_64.whl"),
+        wheel_url("torch-2.6.0+rocm6.4.2.git76481f7c-cp312-cp312-linux_x86_64.whl"),
+        wheel_url("torchvision-0.21.0+rocm6.4.2.git4040d51f-cp312-cp312-linux_x86_64.whl"),
+        wheel_url("torchaudio-2.6.0+rocm6.4.2.gitd8831425-cp312-cp312-linux_x86_64.whl"),
+        wheel_url("pytorch_triton_rocm-3.2.0+rocm6.4.2.git7e948ebf-cp312-cp312-linux_x86_64.whl"),
     ],
 }
 

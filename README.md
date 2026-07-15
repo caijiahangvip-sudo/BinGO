@@ -53,7 +53,7 @@ https://github.com/user-attachments/assets/b4ab35ac-f994-46b1-8957-e82fe87ff0e9
 
 - **Node.js** >= 20
 - **pnpm** >= 10
-- **WSL2 + ROCm-capable AMD GPU** for local CosyVoice, SenseVoice, MinerU, and Chinese Xinhua embedding services. On Windows, run `scripts/launch-install-wsl-rocm-admin.vbs` once if WSL is not installed.
+- **WSL2 + ROCm-capable AMD GPU** for local CosyVoice, SenseVoice, MinerU, and Chinese Xinhua embedding services. Settings detects both the Windows AMD adapter and WSL ROCm/HIP runtime. If setup is required, use “Set up WSL + AMD ROCm” or run `scripts/launch-install-wsl-rocm-admin.vbs`; the installer configures ROCm as WSL root without requiring a separate Linux sudo password.
 
 ### 1. Clone & Install
 

@@ -1,5 +1,7 @@
 param(
-  [string]$DistroName = "Ubuntu-24.04"
+  [string]$DistroName = "Ubuntu-24.04",
+  [string]$RocmVersion = "6.4.2",
+  [string]$AmdGpuInstallUrl = "https://repo.radeon.com/amdgpu-install/6.4.2/ubuntu/noble/amdgpu-install_6.4.60402-1_all.deb"
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +47,58 @@ function Invoke-WslUpdateIfPossible {
   throw "Command failed: wsl.exe --update (exit code $code)"
 }
 
+function Install-RocmInWsl {
+  param(
+    [string]$Distro,
+    [string]$Version,
+    [string]$InstallerUrl
+  )
+
+  $setupScript = @"
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+gpu_name() {
+  rocminfo 2>/dev/null | sed -n 's/^[[:space:]]*Marketing Name:[[:space:]]*\(AMD Radeon.*\)$/\1/p' | head -n 1 | sed 's/[[:space:]]*$//'
+}
+
+if command -v rocminfo >/dev/null 2>&1; then
+  GPU_NAME="`$(gpu_name || true)"
+  if [ -n "`$GPU_NAME" ]; then
+    echo "ROCm/HIP is already ready: `$GPU_NAME"
+    rocminfo >/dev/null
+    exit 0
+  fi
+fi
+
+echo "Installing AMD ROCm $Version for WSL..."
+apt-get update
+apt-get install -y --no-install-recommends ca-certificates wget python3-setuptools python3-wheel
+INSTALLER_DEB="/tmp/amdgpu-install.deb"
+wget -O "`$INSTALLER_DEB" '$InstallerUrl'
+dpkg -i "`$INSTALLER_DEB"
+apt-get update
+amdgpu-install -y --usecase=wsl,rocm --no-dkms
+rm -f "`$INSTALLER_DEB"
+
+GPU_NAME="`$(gpu_name || true)"
+if [ -z "`$GPU_NAME" ]; then
+  echo "ROCm installation completed, but no AMD Radeon HIP device is visible." >&2
+  echo "Update the Windows AMD Software: Adrenalin Edition driver, run wsl --update, then restart Windows." >&2
+  exit 1
+fi
+
+echo "ROCm/HIP ready: `$GPU_NAME"
+rocminfo >/dev/null
+"@
+
+  $encodedScript = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($setupScript))
+  & wsl.exe -d $Distro -u root --exec bash -lc "echo '$encodedScript' | base64 -d | bash"
+  if ($LASTEXITCODE -ne 0) {
+    throw "ROCm setup failed in WSL distro $Distro (exit code $LASTEXITCODE)."
+  }
+}
+
 $root = (Resolve-Path "$PSScriptRoot\..").Path
 $logPath = Join-Path $root "bingo-wsl-rocm-install.log"
 Start-Transcript -Path $logPath -Append | Out-Null
@@ -74,8 +128,11 @@ try {
     Write-Host "$DistroName is already installed."
   }
 
+  Write-Step "Configuring AMD ROCm/HIP in $DistroName"
+  Install-RocmInWsl -Distro $DistroName -Version $RocmVersion -InstallerUrl $AmdGpuInstallUrl
+
   Write-Step "Done"
-  Write-Host "If Windows asks for a restart, restart the computer, then continue ROCm setup from Bingo."
+  Write-Host "WSL and AMD ROCm/HIP are ready. Return to Bingo and refresh GPU diagnostics."
 }
 finally {
   Stop-Transcript | Out-Null

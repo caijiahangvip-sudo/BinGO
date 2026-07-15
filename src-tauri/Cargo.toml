@@ -1,6 +1,6 @@
 [package]
 name = "bingo"
-version = "0.2.0"
+version = "0.2.1"
 description = "BinGO AI interactive classroom desktop client"
 authors = ["BinGO contributors"]
 license = "AGPL-3.0"
