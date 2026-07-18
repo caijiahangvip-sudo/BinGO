@@ -36,6 +36,7 @@ import { cn } from '@/lib/utils';
 import { getProviderTypeLabel } from './utils';
 import { ProviderList } from './provider-list';
 import { ProviderConfigPanel } from './provider-config-panel';
+import { ThinkingSelector } from './thinking-selector';
 import { PDFSettings } from './pdf-settings';
 import { PDF_PROVIDERS } from '@/lib/pdf/constants';
 import type { PDFProviderId } from '@/lib/pdf/types';
@@ -271,7 +272,10 @@ export function SettingsDialog({ open, onOpenChange, initialSection }: SettingsD
 
   // Navigation
   const [activeSection, setActiveSection] = useState<SettingsSection>('providers');
-  const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>(providerId);
+  // 默认选中 OpenAI（若 store 中未配置则回退到 openai，避免右侧空白）
+  const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>(
+    providerId || ('openai' as ProviderId),
+  );
   const [selectedLightweightProviderId, setSelectedLightweightProviderId] =
     useState<ProviderId>(lightweightProviderId);
   const availablePdfProviderIds = Object.keys(PDF_PROVIDERS) as PDFProviderId[];
@@ -1312,19 +1316,6 @@ export function SettingsDialog({ open, onOpenChange, initialSection }: SettingsD
             </button>
 
             <button
-              onClick={() => setActiveSection('lightweight-providers')}
-              className={cn(
-                'w-full flex items-center gap-3 px-3 py-2 text-sm rounded-lg transition-colors text-left min-w-0',
-                activeSection === 'lightweight-providers'
-                  ? 'bg-primary/10 text-primary font-medium'
-                  : 'hover:bg-muted',
-              )}
-            >
-              <Box className="h-4 w-4 shrink-0" />
-              <span className="truncate">{t('settings.lightweightProviders')}</span>
-            </button>
-
-            <button
               onClick={() => setActiveSection('built-in-providers')}
               className={cn(
                 'w-full flex items-center gap-3 px-3 py-2 text-sm rounded-lg transition-colors text-left min-w-0',
@@ -1558,6 +1549,12 @@ export function SettingsDialog({ open, onOpenChange, initialSection }: SettingsD
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-5">
               {activeSection === 'general' && <GeneralSettings />}
+
+              {activeSection === 'providers' && (
+                <div className="mb-4 rounded-lg border border-border bg-card/50 p-3">
+                  <ThinkingSelector />
+                </div>
+              )}
 
               {activeSection === 'built-in-providers' && renderBuiltInProvidersPanel()}
 

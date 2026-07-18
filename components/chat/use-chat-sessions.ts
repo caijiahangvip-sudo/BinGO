@@ -632,6 +632,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         model?: string;
         providerType?: string;
         requiresApiKey?: boolean;
+        thinkingEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'auto';
       },
       controller: AbortController,
       sessionType: SessionType,
@@ -1172,6 +1173,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             model: mc.modelString,
             providerType: mc.providerType,
             requiresApiKey: mc.requiresApiKey,
+            thinkingEffort: useSettingsStore.getState().thinkingEffort,
           },
           controller,
           session.type,
@@ -1395,6 +1397,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             model: mc.modelString,
             providerType: mc.providerType,
             requiresApiKey: mc.requiresApiKey,
+            thinkingEffort: useSettingsStore.getState().thinkingEffort,
           },
           controller,
           sessionType,
@@ -1554,6 +1557,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             model: mc.modelString,
             providerType: mc.providerType,
             requiresApiKey: mc.requiresApiKey,
+            thinkingEffort: useSettingsStore.getState().thinkingEffort,
           },
           controller,
           'discussion',

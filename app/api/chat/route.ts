@@ -17,6 +17,7 @@ import { statelessGenerate } from '@/lib/orchestration/stateless-generate';
 import type { StatelessChatRequest, StatelessEvent } from '@/lib/types/chat';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import { OPENAI_REASONING_EFFORT_XHIGH } from '@/lib/ai/openai-routing';
+import { resolveAutoThinkingEffort } from '@/lib/ai/thinking-auto';
 import { apiError } from '@/lib/server/api-response';
 import { createLogger } from '@/lib/logger';
 import { resolveModel } from '@/lib/server/resolve-model';
@@ -269,10 +270,23 @@ export async function POST(req: NextRequest) {
           },
           signal,
           languageModel,
-          {
-            enabled: true,
-            effort: OPENAI_REASONING_EFFORT_XHIGH,
-          } satisfies ThinkingConfig,
+          ((): ThinkingConfig => {
+            // 读取客户端传入的思考程度；未传则回退到超高（保持原有行为）
+            const effort = body.thinkingEffort;
+            if (effort === 'none') {
+              return { enabled: false };
+            }
+            if (effort === 'auto') {
+              // 自动档：根据本次请求内容智能判断思考深度
+              const { effort: resolved, reason } = resolveAutoThinkingEffort(body.messages);
+              log.info(`[Chat] 自动思考判断 → ${resolved}（${reason}）`);
+              return { enabled: true, effort: resolved };
+            }
+            if (effort) {
+              return { enabled: true, effort };
+            }
+            return { enabled: true, effort: OPENAI_REASONING_EFFORT_XHIGH };
+          })(),
         );
 
         let streamStatus: LlmTelemetryStatus = 'success';

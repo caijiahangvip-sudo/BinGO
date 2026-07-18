@@ -319,6 +319,8 @@ export interface StatelessChatRequest {
   model?: string;
   providerType?: string;
   requiresApiKey?: boolean;
+  /** Thinking effort level for supported models; 'auto' = smart per-request selection */
+  thinkingEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'auto';
 }
 
 /**

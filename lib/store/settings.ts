@@ -63,6 +63,9 @@ export interface SettingsState {
   lightweightProviderId: ProviderId;
   lightweightModelId: string;
 
+  // Thinking effort level (controls reasoning depth for supported models)
+  thinkingEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'auto';
+
   // Provider configurations (unified JSON storage)
   providersConfig: ProvidersConfig;
   deletedBuiltInProviderIds: ProviderId[];
@@ -134,6 +137,7 @@ export interface SettingsState {
 
   // Actions
   setModel: (providerId: ProviderId, modelId: string) => void;
+  setThinkingEffort: (effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'auto') => void;
   setLightweightModel: (providerId: ProviderId, modelId: string) => void;
   setProviderConfig: (providerId: ProviderId, config: Partial<ProvidersConfig[ProviderId]>) => void;
   setProvidersConfig: (config: ProvidersConfig) => void;
@@ -960,6 +964,7 @@ export const useSettingsStore = create<SettingsState>()(
         // Initial state (use migrated data if available)
         providerId: migratedData?.providerId || 'openai',
         modelId: migratedData?.modelId || '',
+        thinkingEffort: 'xhigh',
         lightweightProviderId: initialLightweightProviderId,
         lightweightModelId:
           initialLightweightProviderId === migratedData?.providerId
@@ -1015,6 +1020,7 @@ export const useSettingsStore = create<SettingsState>()(
 
         // Actions
         setModel: (providerId, modelId) => set({ providerId, modelId }),
+        setThinkingEffort: (effort) => set({ thinkingEffort: effort }),
         setLightweightModel: (lightweightProviderId, lightweightModelId) =>
           set({ lightweightProviderId, lightweightModelId }),
 

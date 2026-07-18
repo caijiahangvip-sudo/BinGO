@@ -698,19 +698,16 @@ export function AgentBar() {
   };
 
   return (
-    <div ref={containerRef} className="relative w-96">
+    <div ref={containerRef} className="relative w-fit">
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             className={cn(
-              'group flex items-center gap-2 cursor-pointer rounded-full px-2.5 py-2 transition-all w-full',
+              'group flex items-center gap-2 cursor-pointer rounded-full px-2.5 py-2 transition-all',
               'border border-border/50 text-muted-foreground/70 hover:text-foreground hover:bg-muted/60',
             )}
             onClick={() => setOpen(!open)}
           >
-            <span className="text-xs text-muted-foreground/60 group-hover:text-muted-foreground transition-colors hidden sm:block font-medium flex-1 text-left truncate">
-              {open ? t('agentBar.expandedTitle') : t('agentBar.readyToLearn')}
-            </span>
             {avatarRow}
             {open ? (
               <ChevronUp className="size-3 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />

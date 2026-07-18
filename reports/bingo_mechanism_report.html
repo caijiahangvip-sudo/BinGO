@@ -1,560 +1,185 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>BinGo 当前机制交付报告</title>
-    <style>
-      :root {
-        --fg: #172033;
-        --muted: #5f6b7a;
-        --border: #d8dee8;
-        --soft: #f5f7fb;
-        --accent: #1d4ed8;
-        --accent-soft: #e9f0ff;
-        --ok: #047857;
-        --warn: #b45309;
-        --code-bg: #eef2f7;
-      }
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BinGO系统架构、开源继承关系与工程创新报告</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 920px; margin: 0 auto; padding: 32px 24px; color: #1d1d1f; line-height: 1.7; background: #fff; }
+  h1 { font-size: 26px; border-bottom: 2px solid #007aff; padding-bottom: 10px; }
+  h2 { font-size: 20px; margin-top: 36px; color: #007aff; }
+  h3 { font-size: 16px; margin-top: 24px; }
+  .meta { color: #6e6e73; font-size: 13px; margin-bottom: 24px; }
+  .upstream { background: #f2f2f7; border-left: 4px solid #8e8e93; padding: 12px 16px; margin: 12px 0; border-radius: 6px; }
+  .thirdparty { background: #fff8e1; border-left: 4px solid #ffa000; padding: 12px 16px; margin: 12px 0; border-radius: 6px; }
+  .bingo { background: #e8f5e9; border-left: 4px solid #2e7d32; padding: 12px 16px; margin: 12px 0; border-radius: 6px; }
+  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-right: 6px; font-weight: 600; }
+  .tag-up { background: #8e8e93; color: #fff; }
+  .tag-tp { background: #ffa000; color: #fff; }
+  .tag-bg { background: #2e7d32; color: #fff; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+  th, td { border: 1px solid #d1d1d6; padding: 8px 10px; text-align: left; }
+  th { background: #f2f2f7; }
+  code { background: #f2f2f7; padding: 1px 5px; border-radius: 3px; font-size: 12px; color: #c41e3a; }
+  .warn { background: #fff3e0; border: 1px solid #ff9800; padding: 12px 16px; border-radius: 6px; margin: 12px 0; }
+  .arch { background: #f8f9fa; border: 1px solid #d1d1d6; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
+  .boundary-diagram { background: #fafafa; border: 2px solid #007aff; padding: 20px; border-radius: 10px; margin: 20px 0; }
+</style>
+</head>
+<body>
 
-      * {
-        box-sizing: border-box;
-      }
+<h1>BinGO系统架构、开源继承关系与工程创新报告</h1>
+<div class="meta">
+  版本：2.0（归因整改版）｜ 改写日期：2026-07-18｜ 工作区：d:\BinGo\Bingo<br>
+  原报告：bingo_mechanism_report.html v1.0（2026-06-07）<br>
+  <strong>本版纠正了 v1.0 中将 OpenMAIC 上游机制误归为 BinGO 原创的归因错误。</strong>
+</div>
 
-      body {
-        margin: 0;
-        padding: 32px 42px 56px;
-        color: var(--fg);
-        background: #fff;
-        font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC",
-          sans-serif;
-        line-height: 1.62;
-      }
+<h2>一、项目来源与归因声明（新增，首要章节）</h2>
 
-      .page {
-        max-width: 1080px;
-        margin: 0 auto;
-      }
+<div class="bingo">
+<strong>核心事实：</strong>
+<ul>
+<li>BinGO 的底座是清华大学开源项目 <strong>OpenMAIC</strong>（Open Multi-Agent Interactive Classroom，仓库 github.com/THU-MAIC/Bingo，附 JCST 2026 论文）。</li>
+<li>Git 远程：<code>origin = THU-MAIC/OpenMAIC.git</code>（上游）；<code>bingo = caijiahangvip-sudo/BinGO.git</code>（参赛者 fork）。</li>
+<li>BinGO <strong>不是从零发明</strong>，而是基于 OpenMAIC 的二次开发工程。</li>
+</ul>
+</div>
 
-      h1,
-      h2,
-      h3 {
-        margin: 0;
-        color: #0f172a;
-        font-weight: 700;
-      }
+<p>BinGO 的贡献定位：</p>
+<p style="background:#e3f2fd;padding:12px;border-radius:6px;">
+<strong>BinGO 把 OpenMAIC 工程化为 Windows 一键安装、本地/离线可运行的桌面产品，并补充 AMD ROCm 本地推理、Windows 凭据管理器密钥存储、系统代理适配、自动更新与中文本地化能力。</strong>
+</p>
 
-      h1 {
-        font-size: 30px;
-        line-height: 1.25;
-      }
+<h2>二、开源继承与原创贡献边界图（新增）</h2>
 
-      h2 {
-        margin-top: 30px;
-        margin-bottom: 12px;
-        padding-bottom: 8px;
-        border-bottom: 1px solid var(--border);
-        font-size: 21px;
-      }
+<div class="boundary-diagram">
+<pre style="margin:0;font-family:monospace;font-size:13px;line-height:1.6;">
+┌─────────────────────────────────────────────────────────────┐
+│                    BinGO 系统能力全景                         │
+├──────────────────────┬──────────────────────┬───────────────┤
+│  OpenMAIC 上游提供    │  第三方开源组件       │  BinGO 自有    │
+│  （非 BinGO 原创）    │  （非 BinGO 原创）    │  （原创/深改） │
+├──────────────────────┼──────────────────────┼───────────────┤
+│ · 多智能体课堂编排    │ · MinerU（PDF解析）   │ · Windows桌面  │
+│   (ICAP辩论/teach-   │ · SenseVoice(ASR)    │   运行时(Rust) │
+│    back，director-   │ · CosyVoice(TTS)     │ · 凭据管理器   │
+│    graph.ts)         │ · Tauri+Rust(桌面壳) │ · WinHTTP代理  │
+│ · 动作引擎+安全校验   │ · Next.js/React      │   +PAC         │
+│   (action/engine.ts) │ · ROCm(AMD运行时)    │ · Job Object   │
+│ · 学习画像引擎       │ · pptxgenjs(PPT导出) │ · 捆绑启动+    │
+│   (profile-engine)   │ · 新华字典开源数据    │   健康检查     │
+│ · 课堂生成/回放/白板  │                      │ · 自动更新+    │
+│   /PPTX导出          │                      │   NSIS安装器   │
+│ · PDF/语音/向量集成   │                      │ · WSL+ROCm     │
+│ · 核心前端页面        │                      │   启动器       │
+│                      │                      │ · 新华字典检索 │
+│                      │                      │   /教材下载/   │
+│                      │                      │   本地备份     │
+└──────────────────────┴──────────────────────┴───────────────┘
+</pre>
+</div>
 
-      h3 {
-        margin-top: 18px;
-        margin-bottom: 8px;
-        font-size: 16px;
-      }
+<p><strong>图例说明</strong>：左列为 OpenMAIC 上游教学机制（BinGO 在其基础上做部署与使用流程扩展，未改核心逻辑）；中列为第三方开源组件；右列为 BinGO 自行新增或深度改造的工程能力（有代码证据）。</p>
 
-      p {
-        margin: 8px 0;
-      }
+<h2>三、OpenMAIC 上游提供的教学机制（归因纠正）</h2>
 
-      ul,
-      ol {
-        margin: 8px 0 8px 22px;
-        padding: 0;
-      }
+<div class="warn">
+<strong>归因纠正声明：</strong>本节内容在 v1.0 报告中被描述为"BinGo 机制"，这是错误的。以下机制均来自 OpenMAIC 上游，BinGO 未自研这些教学机制，仅在其基础上完成部署、本地化和使用流程扩展。
+</div>
 
-      li {
-        margin: 5px 0;
-      }
+<h3>3.1 多智能体课堂编排（OpenMAIC 上游）</h3>
+<p><span class="tag tag-up">上游</span> ICAP 辩论、Teach-back 视觉推进、请求澄清等课堂编排机制，由上游 <code>lib/orchestration/director-graph.ts</code> 实现（含 <code>discussionMode: 'debate'</code>、<code>request_clarification</code>、<code>wait_for_user_teaching</code>）。BinGO 未修改其核心编排逻辑。</p>
 
-      code {
-        padding: 1px 5px;
-        border-radius: 5px;
-        background: var(--code-bg);
-        color: #111827;
-        font-family: "Cascadia Code", Consolas, monospace;
-        font-size: 0.94em;
-      }
+<h3>3.2 动作引擎与安全校验（OpenMAIC 上游）</h3>
+<p><span class="tag tag-up">上游</span> 动作越界拦截、安全动作集、有效动作计算，由上游 <code>lib/action/engine.ts</code> 实现（<code>validateAction</code>、<code>SAFETY_ACTIONS</code>、<code>getEffectiveActions</code>）。BinGO 未自研动作安全引擎。</p>
 
-      table {
-        width: 100%;
-        margin: 12px 0;
-        border-collapse: collapse;
-        font-size: 13px;
-      }
+<h3>3.3 学习画像引擎（OpenMAIC 上游）</h3>
+<p><span class="tag tag-up">上游</span> 接入 ICAP 证据、跨课时画像生成，由上游 <code>lib/learning/profile-engine.ts</code> 实现。BinGO 未自研学习画像。</p>
 
-      th,
-      td {
-        padding: 9px 11px;
-        border: 1px solid var(--border);
-        text-align: left;
-        vertical-align: top;
-      }
+<h3>3.4 课堂生成、回放、白板账本、课件导出（OpenMAIC 上游）</h3>
+<p><span class="tag tag-up">上游</span> 大纲/场景/幻灯片生成（<code>lib/generation/</code>）、结构化回放（<code>lib/playback/</code>）、白板账本（<code>lib/store/canvas.ts</code> 的 <code>WhiteboardActionRecord</code>）、PPTX 导出（<code>lib/export/</code>，用第三方 pptxgenjs）均来自上游。</p>
 
-      th {
-        background: #f8fafc;
-      }
+<h3>3.5 PDF/语音/向量集成（OpenMAIC 上游集成第三方）</h3>
+<p><span class="tag tag-up">上游集成</span> <span class="tag tag-tp">第三方</span> 上游集成了 MinerU（PDF）、SenseVoice（ASR）、CosyVoice（TTS）、向量检索。BinGO 仅补充了本地服务启动脚本。</p>
 
-      .hero {
-        padding: 26px 30px 24px;
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        background: linear-gradient(180deg, #fbfdff 0%, #f1f6ff 100%);
-      }
+<h2>四、第三方开源组件</h2>
 
-      .subtitle {
-        color: var(--muted);
-        font-size: 14px;
-      }
+<div class="thirdparty">
+<table>
+<tr><th>组件</th><th>职责</th><th>证据</th></tr>
+<tr><td>MinerU</td><td>教材 PDF 转结构化</td><td><code>scripts/mineru-*.ps1</code></td></tr>
+<tr><td>SenseVoice</td><td>语音识别</td><td><code>scripts/sensevoice-*.ps1</code></td></tr>
+<tr><td>CosyVoice</td><td>语音合成</td><td><code>scripts/cosyvoice-*.ps1</code></td></tr>
+<tr><td>Tauri+Rust</td><td>桌面壳+系统编程</td><td><code>src-tauri/</code></td></tr>
+<tr><td>ROCm</td><td>AMD GPU 运行时</td><td><code>app/api/local-services/configure-rocm</code></td></tr>
+<tr><td>Next.js/React</td><td>Web 框架+UI</td><td><code>package.json</code></td></tr>
+<tr><td>pptxgenjs</td><td>PPT 生成</td><td><code>lib/export/</code></td></tr>
+<tr><td>新华字典开源数据</td><td>字典数据</td><td><code>data/chinese-xinhua/</code></td></tr>
+</table>
+</div>
 
-      .meta {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
-        margin-top: 16px;
-      }
+<h2>五、BinGO 自行新增或深度改造的工程能力</h2>
 
-      .meta-item {
-        padding: 11px 13px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: #fff;
-      }
+<div class="bingo">
+<p>以下每项均给出代码路径，为 BinGO 真实且可验证的贡献。</p>
 
-      .meta-label {
-        display: block;
-        margin-bottom: 4px;
-        color: var(--muted);
-        font-size: 12px;
-      }
+<h3>5.1 Windows 桌面运行时（Tauri+Rust）</h3>
+<p><span class="tag tag-bg">BinGO</span> 文件：<code>src-tauri/src/lib.rs</code>（608 行）、<code>src-tauri/tauri.conf.json</code>。把 Web 端打包为 Windows 桌面应用，捆绑 node.exe+server.js。提交：<code>5a9e9d3</code>。</p>
 
-      .toc,
-      .card,
-      .callout {
-        border: 1px solid var(--border);
-        border-radius: 10px;
-      }
+<h3>5.2 Windows 凭据管理器存储密钥</h3>
+<p><span class="tag tag-bg">BinGO</span> 文件：<code>src-tauri/src/lib.rs</code>。<code>desktop_secret_write</code>(L435, CredWriteW)、<code>desktop_secret_read</code>(L361)、<code>desktop_secret_delete</code>(L471)。API Key 存入 OS 凭据库（<code>CRED_PERSIST_LOCAL_MACHINE</code>），非明文。测试：<code>validates_secret_targets</code>。</p>
 
-      .toc {
-        margin-top: 18px;
-        padding: 16px 18px;
-        background: var(--soft);
-      }
+<h3>5.3 WinHTTP 系统代理与 PAC 适配</h3>
+<p><span class="tag tag-bg">BinGO</span> 文件：<code>src-tauri/src/lib.rs</code>。<code>windows_system_proxy</code>(L220)、<code>normalize_proxy_address</code>(L182)。用 <code>WinHttpGetIEProxyConfigForCurrentUser</code>、<code>WinHttpGetProxyForUrl</code>（PAC 自动配置）。测试：<code>normalizes_windows_proxy_formats</code>（4 种格式）。</p>
 
-      .card {
-        margin: 12px 0;
-        padding: 14px 16px;
-        background: #fff;
-      }
+<h3>5.4 Job Object 后台进程回收</h3>
+<p><span class="tag tag-bg">BinGO</span> 文件：<code>src-tauri/src/lib.rs</code>。<code>attach_kill_on_close_job</code>(L34) 用 <code>CreateJobObjectW</code>+<code>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</code>，应用退出自动回收子进程。</p>
 
-      .callout {
-        margin: 12px 0;
-        padding: 12px 14px;
-        border-left: 4px solid var(--accent);
-        background: var(--accent-soft);
-      }
+<h3>5.5 多服务捆绑启动 + 5 次重试 + 健康检查</h3>
+<p><span class="tag tag-bg">BinGO</span> 文件：<code>src-tauri/src/lib.rs</code>。<code>start_bingo_server</code>(L497, 5 次重试)、<code>wait_until_ready</code>(L134, 24s 超时)、<code>health_is_ready</code>(L110, 校验 status/desktop/version)、会话令牌 <code>desktop_session_token</code>。提交：<code>8ee751c</code>。</p>
 
-      .grid-2 {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-      }
+<h3>5.6 自动更新与 NSIS 安装器</h3>
+<p><span class="tag tag-bg">BinGO</span> 文件：<code>src-tauri/tauri.conf.json</code>、<code>.github/workflows/release-desktop.yml</code>、<code>DESKTOP_RELEASE.md</code>。Tauri updater 签名校验 + GitHub Actions 自动构建。</p>
 
-      .badge {
-        display: inline-block;
-        margin-right: 6px;
-        padding: 2px 7px;
-        border-radius: 999px;
-        background: #ecfdf5;
-        color: var(--ok);
-        font-size: 12px;
-        font-weight: 600;
-      }
+<h3>5.7 WSL + AMD ROCm 本地模型启动器</h3>
+<p><span class="tag tag-bg">BinGO</span> 文件：<code>scripts/start-bingo.ps1</code>（377 行）、<code>app/api/local-services/configure-rocm/route.ts</code>。编排 4 个本地服务（CosyVoice 50000/SenseVoice 50001/MinerU 50002/Embedding 50003），WSL 端口探测。提交：<code>d35c78c</code>。让无 N 卡用户经 ROCm 跑本地模型。</p>
 
-      .warn {
-        background: #fffbeb;
-        color: var(--warn);
-      }
+<h3>5.8 中文本地化能力集</h3>
+<p><span class="tag tag-bg">BinGO</span> 新华字典检索（<code>app/api/chinese-xinhua/</code>，已验证 200）、教材下载器（<code>app/api/textbooks/*</code>）、本地备份（<code>app/api/local-backup</code>，已验证 200）、桌面运行时门（<code>components/desktop-*</code>）。</p>
+</div>
 
-      .small {
-        color: var(--muted);
-        font-size: 12px;
-      }
+<h2>六、系统架构（文字版架构图）</h2>
 
-      .no-break {
-        break-inside: avoid;
-        page-break-inside: avoid;
-      }
+<div class="arch">用户操作
+ → 前端页面 [app/page.tsx, app/classroom/] —— 上游
+ → 后端服务 [app/api/chat, app/api/generate] —— 上游
+ → 教材/知识 [lib/pdf MinerU第三方, app/api/textbooks BinGO, lib/vector 上游, data/chinese-xinhua BinGO]
+ → 多智能体课堂 [lib/orchestration 上游, lib/action 上游, lib/generation 上游]
+ → 语音I/O [lib/audio 上游集成, scripts/*voice BinGO启动脚本]
+ → 学习记录 [lib/learning 上游, app/api/local-backup BinGO]
+ → 桌面运行时 [src-tauri BinGO, scripts/start-bingo.ps1 BinGO]</div>
 
-      @media print {
-        body {
-          padding: 20px 24px 34px;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <main class="page">
-      <section class="hero no-break">
-        <h1>BinGo 当前机制交付报告</h1>
-        <p class="subtitle">
-          面向交付验收的机制总览。覆盖无状态大模型编排、结构化事件流、多智能体辩论、
-          Teach-back Vision、多模态白板、Vision Hallucination Fallback、防御性 Action Engine、
-          学习画像、CI/CD、可观测性与性能优化。
-        </p>
-        <div class="meta">
-          <div class="meta-item">
-            <span class="meta-label">项目目录</span>
-            <div><code>C:\Users\jiaha\Documents\BinGo\Bingo</code></div>
-          </div>
-          <div class="meta-item">
-            <span class="meta-label">技术栈</span>
-            <div>Next.js 16, React 19, Zustand, SSE, Playwright</div>
-          </div>
-          <div class="meta-item">
-            <span class="meta-label">生成日期</span>
-            <div>2026-06-07</div>
-          </div>
-        </div>
-      </section>
+<h2>七、归因纠正对照（v1.0 → v2.0）</h2>
 
-      <section class="toc no-break">
-        <h3>目录</h3>
-        <ol>
-          <li>执行摘要</li>
-          <li>核心运行架构</li>
-          <li>ICAP Debate Flow 机制</li>
-          <li>Teach-back Vision 机制</li>
-          <li>Vision Hallucination Fallback 机制</li>
-          <li>白板账本、摘要与 Token 防御</li>
-          <li>Action Engine 防御边界</li>
-          <li>学习画像闭环</li>
-          <li>生产级基建与可观测性</li>
-          <li>性能优化与测试覆盖</li>
-          <li>当前交付状态</li>
-        </ol>
-      </section>
+<table>
+<tr><th>位置</th><th>v1.0 错误表述</th><th>v2.0 正确表述</th></tr>
+<tr><td>标题</td><td>"BinGo 机制报告"（暗示自研机制）</td><td>"系统架构、开源继承关系与工程创新报告"</td></tr>
+<tr><td>摘要</td><td>"BinGo 的核心机制"</td><td>"OpenMAIC 上游机制 + BinGO 工程化贡献"</td></tr>
+<tr><td>第3章</td><td>"BinGo 的多智能体编排"</td><td>"OpenMAIC 上游的多智能体编排，BinGO 未改核心"</td></tr>
+<tr><td>第4章</td><td>"BinGo 的动作引擎"</td><td>"OpenMAIC 上游的动作引擎与安全校验"</td></tr>
+<tr><td>第5章</td><td>"BinGo 的学习画像"</td><td>"OpenMAIC 上游的学习画像引擎"</td></tr>
+<tr><td>第6章</td><td>"BinGo 的白板账本"</td><td>"OpenMAIC 上游的白板账本"</td></tr>
+<tr><td>第7-8章</td><td>"BinGo 的课堂生成/导出"</td><td>"OpenMAIC 上游的课堂生成与导出"</td></tr>
+</table>
 
-      <h2>1. 执行摘要</h2>
-      <p>
-        BinGo 当前已经从“AI 生成课堂”升级为一个完整的教育操作系统 Runtime。系统以
-        <code>Stage -> Scene -> Action</code> 为课堂对象模型，以无状态
-        <code>StatelessChatRequest</code> 为大模型编排边界，以 SSE 结构化事件流驱动前端
-        Action Engine 和 Chat Session。
-      </p>
-      <div class="callout">
-        当前交付重点是三类能力已经闭环：第一，ICAP 的辩论与反向讲授机制可运行；
-        第二，白板视觉链路可被 Vision 模型读取；第三，生产级防御、测试、CI 和 telemetry
-        已接入；第四，Vision 低置信度场景会降级为澄清请求，不再让模型强行评价模糊白板。
-      </div>
+<h2>八、禁用与推荐表述</h2>
 
-      <h2>2. 核心运行架构</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>模块</th>
-            <th>职责</th>
-            <th>关键文件</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>课堂控制器</td>
-            <td>维护播放状态、讨论状态、Teach-back 等待状态和 Roundtable 输入</td>
-            <td><code>components/stage.tsx</code></td>
-          </tr>
-          <tr>
-            <td>聊天会话层</td>
-            <td>组装无状态请求、处理 SSE、维护 session、合并白板账本</td>
-            <td><code>components/chat/use-chat-sessions.ts</code></td>
-          </tr>
-          <tr>
-            <td>动作执行层</td>
-            <td>统一执行白板、舞台、讨论、等待学生讲解等结构化动作</td>
-            <td><code>lib/action/engine.ts</code></td>
-          </tr>
-          <tr>
-            <td>服务端编排入口</td>
-            <td>接收完整上下文、调用 statelessGenerate、返回 SSE</td>
-            <td><code>app/api/chat/route.ts</code></td>
-          </tr>
-          <tr>
-            <td>白板 Store</td>
-            <td>保存白板开启状态、学生作图事件、快照导出函数</td>
-            <td><code>lib/store/canvas.ts</code></td>
-          </tr>
-        </tbody>
-      </table>
+<div class="warn">
+<strong>禁用：</strong>"完全自主研发""自主发明多智能体教学机制""自研学习画像/动作引擎/语音/PDF解析"。
+</div>
 
-      <h2>3. ICAP Debate Flow 机制</h2>
-      <div class="card no-break">
-        <h3>3.1 辩论阶段模型</h3>
-        <p>
-          Debate Flow 使用 <code>discussionMode: 'debate'</code> 标记讨论 session。
-          后端 director 以 Agent A、Agent B、User 判决的固定阶段推进，避免普通讨论中发言权漂移。
-        </p>
-        <ul>
-          <li>正方 Agent A 在白板左侧表达观点。</li>
-          <li>反方 Agent B 在白板右侧表达观点。</li>
-          <li>学生最终输入判决文本，系统将其作为批判性思维证据。</li>
-        </ul>
-      </div>
-      <div class="card no-break">
-        <h3>3.2 前端判决埋点</h3>
-        <p>
-          <code>ChatAreaRef.getActiveDiscussionMode()</code> 暴露当前 active discussion 的模式。
-          <code>Stage.handleRoundtableMessageSend()</code> 在识别 debate session 且用户输入非空时调用
-          <code>trackEvent('icap_interaction', { type: 'debate_judgment' })</code>。
-        </p>
-      </div>
+<p><strong>推荐：</strong>"基于清华开源 OpenMAIC 二次开发""采用上游多智能体编排""BinGO 贡献在 Windows 工程化、AMD 兼容、凭据安全、中文本地化"。</p>
 
-      <h2>4. Teach-back Vision 机制</h2>
-      <div class="grid-2">
-        <div class="card no-break">
-          <h3>4.1 阻塞与破局</h3>
-          <p>
-            <code>wait_for_user_teaching</code> 会在 Stage 中创建挂起 Promise。
-            学生需要完成白板编辑并发送讲解，系统才会 resolve。若学生点击
-            <code>Need Hint</code>，系统会发送隐藏消息 <code>[USER_REQUESTED_HINT]</code>
-            并退出学生主导状态。
-          </p>
-        </div>
-        <div class="card no-break">
-          <h3>4.2 多模态快照</h3>
-          <p>
-            Teach-back 提交时，Stage 调用 <code>useCanvasStore.getState().getCanvasSnapshot()</code>
-            获取白板 JPEG Base64，并通过 <code>attachments</code> 附加到用户消息。
-            <code>use-chat-sessions.ts</code> 将其转换为 OpenAI 兼容的
-            <code>image_url</code> 多模态 content。
-          </p>
-        </div>
-      </div>
-      <p>
-        快照导出只包含白板绘制结果，不包含工具栏等 UI 元素。导出逻辑加入了 JPEG quality
-        动态压缩，目标是将 Vision 请求图片控制在约 500KB 以内。
-      </p>
-
-      <h2>5. Vision Hallucination Fallback 机制</h2>
-      <div class="grid-2">
-        <div class="card no-break">
-          <h3>5.1 Prompt 级置信度约束</h3>
-          <p>
-            <code>lib/orchestration/director-prompt.ts</code> 新增
-            <code>VISION_CONFIDENCE_FALLBACK_PROMPT</code>。当最新用户消息包含白板图片时，
-            Vision 模型必须先在内部评估“视觉清晰度与理解置信度（0-1）”。若
-            <code>visionConfidence &lt; 0.7</code>，不得评价、纠错或推断学生意图。
-          </p>
-        </div>
-        <div class="card no-break">
-          <h3>5.2 降级 Action</h3>
-          <p>
-            <code>lib/types/action.ts</code> 新增
-            <code>request_clarification</code> 安全动作，并通过
-            <code>SAFETY_ACTIONS</code> 在 <code>getEffectiveActions()</code> 中强制可用。
-            这保证旧 Agent 配置未显式授权时，低置信度安全降级仍不会被动作过滤器丢弃。
-          </p>
-        </div>
-      </div>
-      <div class="card no-break">
-        <h3>5.3 编排短路与可见反馈</h3>
-        <p>
-          <code>lib/orchestration/director-graph.ts</code> 在解析到
-          <code>request_clarification</code> 后，会优先合成 AI 气泡文本：
-          “你画的这部分线条有点密集，我看得不是很确切，你能用语音再补充解释一下这里的连线逻辑吗？”
-          随后发出 action 事件并停止处理该 Agent 后续输出，避免模型在低置信度下继续生成幻觉式评价。
-        </p>
-      </div>
-
-      <h2>6. 白板账本、摘要与 Token 防御</h2>
-      <p>
-        白板编辑事件会被记录为 <code>WhiteboardActionRecord</code>，并随
-        <code>directorState.whiteboardLedger</code> 注入下一轮无状态请求。为防止上下文膨胀，
-        当前实现设置 <code>MAX_LEDGER_ENTRIES = 10</code>。
-      </p>
-      <div class="card no-break">
-        <h3>5.1 智能摘要预留</h3>
-        <p>
-          当账本超过 10 条时，系统将早期记录压缩为一条
-          <code>{ type: 'summary', content, sourceCount }</code>，后续保留最近 9 条原始记录。
-          代码处保留 <code>// TODO: call summarization AI</code>，当前用轻量本地摘要函数占位。
-        </p>
-      </div>
-      <div class="card no-break">
-        <h3>5.2 全量编辑器事件桥接</h3>
-        <p>
-          <code>WhiteboardEditorTrace</code> 统一承接未来 Fabric.js / Konva 等底层引擎事件。
-          已监听并规范化 <code>object:modified</code>、<code>path:created</code>、
-          <code>selection:deleted</code>，再写入 <code>recordStudentWhiteboardAction()</code>。
-        </p>
-      </div>
-
-      <h2>7. Action Engine 防御边界</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>风险</th>
-            <th>防御机制</th>
-            <th>状态</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>AI 绘图越界</td>
-            <td>
-              <code>ActionEngine.validateAction()</code> 在执行前拦截
-              <code>wb_draw_text</code>。Debate 中 Agent A 的 x 被限制到
-              <code>[60, 430]</code>，Agent B 被限制到 <code>[560, 920]</code>。
-            </td>
-            <td><span class="badge">已完成</span></td>
-          </tr>
-          <tr>
-            <td>教学死锁</td>
-            <td>
-              Need Hint 强制 resolve 当前 <code>pendingTeachingWaitRef</code>，隐藏发送控制消息，
-              并记录学习证据。
-            </td>
-            <td><span class="badge">已完成</span></td>
-          </tr>
-          <tr>
-            <td>Vision 低置信度幻觉</td>
-            <td>
-              <code>request_clarification</code> 进入统一动作层。模型低置信度时只请求学生补充说明，
-              不执行默认评价逻辑。
-            </td>
-            <td><span class="badge">已完成</span></td>
-          </tr>
-          <tr>
-            <td>Token 爆炸</td>
-            <td>白板账本滑动窗口与摘要记录替换早期明细。</td>
-            <td><span class="badge">已完成</span></td>
-          </tr>
-        </tbody>
-      </table>
-
-      <h2>8. 学习画像闭环</h2>
-      <p>
-        <code>lib/learning/profile-engine.ts</code> 已接入 Teach-back 与 Debate 两类 ICAP 证据。
-      </p>
-      <ul>
-        <li>
-          学生点击 Need Hint 时生成“建构受阻/需引导”证据，响应文本为
-          <code>USER_REQUESTED_HINT</code>。
-        </li>
-        <li>
-          Debate 结束后抽取学生最终判决，生成“批判性思维/观点判决”证据。
-        </li>
-        <li>证据统一写入学习画像更新流，供跨课时生成和个性化补救使用。</li>
-      </ul>
-
-      <h2>9. 生产级基建与可观测性</h2>
-      <div class="grid-2">
-        <div class="card no-break">
-          <h3>8.1 CI/CD</h3>
-          <p>
-            <code>.github/workflows/ci.yml</code> 已配置 main 分支 push/PR 门禁。
-            工作流安装 pnpm 依赖后依次执行：
-          </p>
-          <ul>
-            <li><code>pnpm exec eslint .</code></li>
-            <li><code>pnpm exec tsc --noEmit</code></li>
-            <li><code>pnpm exec playwright install chromium --with-deps</code></li>
-            <li><code>pnpm exec playwright test</code></li>
-          </ul>
-        </div>
-        <div class="card no-break">
-          <h3>8.2 LLM Telemetry</h3>
-          <p>
-            <code>app/api/chat/route.ts</code> 已记录每次请求的 latency、估算 input/output token、
-            session 标签、debate 标签和 <code>vision-teach-back</code> 标签。
-            <code>lib/telemetry.ts</code> 保留 <code>// TODO: send to LangSmith/Helicone</code>。
-          </p>
-        </div>
-      </div>
-      <p>
-        前端 <code>trackEvent()</code> 已预留 PostHog/Mixpanel 接口。没有接入真实 SDK 时，
-        开发环境会输出调试日志，生产环境不会阻塞课堂流程。
-      </p>
-
-      <h2>10. 性能优化与测试覆盖</h2>
-      <div class="card no-break">
-        <h3>9.1 Dynamic Import</h3>
-        <p>
-          白板组件已从静态引入改为 <code>next/dynamic</code> 懒加载。
-          <code>components/canvas/canvas-area.tsx</code> 只在 <code>whiteboardOpen</code> 为 true
-          时加载白板 chunk，并提供稳定尺寸的 loading skeleton，减少首屏 FCP 压力和布局抖动。
-        </p>
-      </div>
-      <div class="card no-break">
-        <h3>9.2 E2E Vision 测试</h3>
-        <p>
-          <code>tests/e2e/teach-back-vision.spec.ts</code> 模拟 Teach-back 模式下用户作图并发送讲解。
-          测试通过 <code>page.route('/api/chat')</code> 拦截请求，断言 messages 中同时包含文本与
-          格式正确的 Base64 <code>image_url</code>。
-        </p>
-      </div>
-
-      <h2>11. 当前交付状态</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>能力</th>
-            <th>结果</th>
-            <th>备注</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>无状态 SSE 编排</td>
-            <td><span class="badge">稳定</span></td>
-            <td>请求上下文由前端完整组装，后端无会话依赖。</td>
-          </tr>
-          <tr>
-            <td>Debate Flow</td>
-            <td><span class="badge">完成</span></td>
-            <td>包含 Action 边界钳制和判决证据沉淀。</td>
-          </tr>
-          <tr>
-            <td>Teach-back Vision</td>
-            <td><span class="badge">完成</span></td>
-            <td>包含白板快照、隐藏提示消息、Need Hint bailout。</td>
-          </tr>
-          <tr>
-            <td>Vision Fallback</td>
-            <td><span class="badge">完成</span></td>
-            <td>低置信度白板图像会降级为 <code>request_clarification</code>，避免幻觉评价。</td>
-          </tr>
-          <tr>
-            <td>Token 防御</td>
-            <td><span class="badge">完成</span></td>
-            <td>账本摘要压缩已替代单纯硬截断。</td>
-          </tr>
-          <tr>
-            <td>可观测性</td>
-            <td><span class="badge warn">接口预留</span></td>
-            <td>已记录本地 telemetry，LangSmith/Helicone、PostHog/Mixpanel 等待正式密钥接入。</td>
-          </tr>
-          <tr>
-            <td>生产门禁</td>
-            <td><span class="badge">完成</span></td>
-            <td>CI 覆盖 lint、typecheck、Playwright E2E。</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <p class="small">
-        本报告基于当前工作区实现生成。报告文件目标：桌面
-        <code>BinGo-机制总览报告.pdf</code>。
-      </p>
-    </main>
-  </body>
+</body>
 </html>

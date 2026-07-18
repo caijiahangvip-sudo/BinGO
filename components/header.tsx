@@ -10,7 +10,6 @@ import {
   Download,
   FileDown,
   Package,
-  Palette,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useTheme } from '@/lib/hooks/use-theme';
@@ -22,7 +21,6 @@ import { cn } from '@/lib/utils';
 import { useStageStore } from '@/lib/store/stage';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useExportPPTX } from '@/lib/export/use-export-pptx';
-import { COLOR_THEME_PRESETS } from '@/lib/theme/color-themes';
 
 interface HeaderProps {
   readonly currentSceneTitle: string;
@@ -31,7 +29,7 @@ interface HeaderProps {
 
 export function Header({ currentSceneTitle, extraActions }: HeaderProps) {
   const { t, locale } = useI18n();
-  const { theme, setTheme, colorTheme, setColorTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
   const router = useRouter();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
@@ -162,44 +160,6 @@ export function Header({ currentSceneTitle, extraActions }: HeaderProps) {
                     <Monitor className="w-4 h-4" />
                     {t('settings.themeOptions.system')}
                   </button>
-                  <div className="mx-2 my-1 border-t border-border/70" />
-                  <div className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold text-muted-foreground">
-                    <Palette className="size-3.5" />
-                    {locale === 'zh-CN' ? '配色方案' : 'Color Scheme'}
-                  </div>
-                  {COLOR_THEME_PRESETS.map((preset) => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      onClick={() => {
-                        setColorTheme(preset.id);
-                        setThemeOpen(false);
-                      }}
-                      className={cn(
-                        'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent/70',
-                        colorTheme === preset.id && 'bg-primary/10 text-primary',
-                      )}
-                    >
-                      <span className="flex shrink-0 overflow-hidden rounded-full ring-1 ring-border">
-                        <span
-                          className="h-4 w-4"
-                          style={{ backgroundColor: preset.light.primary }}
-                        />
-                        <span
-                          className="h-4 w-4"
-                          style={{ backgroundColor: preset.light.accent }}
-                        />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate">
-                          {locale === 'zh-CN' ? preset.label.zh : preset.label.en}
-                        </span>
-                        <span className="block truncate text-[11px] text-muted-foreground">
-                          {locale === 'zh-CN' ? preset.description.zh : preset.description.en}
-                        </span>
-                      </span>
-                    </button>
-                  ))}
                 </div>
               )}
             </div>
