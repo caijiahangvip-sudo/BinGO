@@ -13,7 +13,6 @@ use tauri::{AppHandle, Manager};
 
 const SECRET_SCOPES: &[&str] = &[
   "llm",
-  "lightweight-llm",
   "tts",
   "asr",
   "pdf",
