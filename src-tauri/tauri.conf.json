@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "BinGO",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "identifier": "app.bingo.desktop",
   "build": {
     "frontendDist": "../desktop-loader",
@@ -52,7 +52,7 @@
         "https://github.com/caijiahangvip-sudo/BinGO/releases/latest/download/latest.json"
       ],
       "dialog": false,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJGNThCQzlERTQ3M0I4QTMKUldTanVIUGtuYnhZTHpuRDZLZ21XOTZkUkU5ZTgrYUFSRGphWHRjQkhHbUtCTi8xa1RVN3YrUVgK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY2NEQ3MjVDNzU0ODYxMjIKUldRaVlVaDFYSEpOWm5rTmQvaTd3UzJsTVhtQytSVWJOSmRBcWlMTTNNcmRySjlDc0RjRG9kMkwK"
     }
   }
 }
