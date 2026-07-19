@@ -817,6 +817,29 @@ function GenerationPreviewContent() {
         throw new Error(contentData.error || t('generation.sceneGenerateFailed'));
       }
 
+      // Show the first slide as soon as its visual content is ready. Actions and
+      // narration are enriched in the background and must not block first paint.
+      const pendingSceneId = nanoid(12);
+      const pendingScene = {
+        id: pendingSceneId,
+        stageId: stage.id,
+        type: 'slide' as const,
+        title: firstOutline.title,
+        order: firstOutline.order,
+        content: contentData.content,
+        actions: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      store.addScene(pendingScene);
+      store.setCurrentSceneId(pendingSceneId);
+      store.setGeneratingOutlines(outlines.filter((o) => o.order !== firstOutline.order));
+      storeSessionGenerationParams(stage.id, generationParams);
+      markAutoStartFirstLecture(stage.id);
+      await store.saveToStorage();
+      sessionStorage.removeItem('generationSession');
+      router.push(`/classroom/${stage.id}`);
+
       // Generate actions (activate actions step indicator)
       const actionsStepIdx = activeSteps.findIndex((s) => s.id === 'actions');
       setCurrentStepIndex(actionsStepIdx >= 0 ? actionsStepIdx : currentStepIndex + 1);
@@ -834,7 +857,6 @@ function GenerationPreviewContent() {
           userProfile,
           visualTheme: stage.visualTheme,
         }),
-        signal,
       });
 
       if (!actionsResp.ok) {
@@ -846,6 +868,15 @@ function GenerationPreviewContent() {
       if (!data.success || !data.scene) {
         throw new Error(data.error || t('generation.sceneGenerateFailed'));
       }
+
+      // Replace the lightweight scene with the fully enriched scene once actions
+      // are ready. The classroom is already visible while this work completes.
+      store.updateScene(pendingSceneId, {
+        actions: data.scene.actions || [],
+        whiteboards: data.scene.whiteboards,
+        multiAgent: data.scene.multiAgent,
+        updatedAt: Date.now(),
+      });
 
       // Generate TTS for first scene (part of actions step — blocking)
       const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
@@ -877,7 +908,6 @@ function GenerationPreviewContent() {
                 ttsBaseUrl: ttsProviderConfig?.baseUrl || undefined,
                 ttsProviderOptions: ttsProviderConfig?.providerOptions,
               }),
-              signal,
             });
             if (!resp.ok) {
               if (failSceneOnTTSFailure) {
