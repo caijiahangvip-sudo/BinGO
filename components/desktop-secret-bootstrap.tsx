@@ -6,7 +6,6 @@ import { useSettingsStore, type SettingsState } from '@/lib/store/settings';
 
 type SecretScope =
   | 'llm'
-  | 'lightweight-llm'
   | 'tts'
   | 'asr'
   | 'pdf'
@@ -15,7 +14,6 @@ type SecretScope =
 
 type ConfigKey =
   | 'providersConfig'
-  | 'lightweightProvidersConfig'
   | 'ttsProvidersConfig'
   | 'asrProvidersConfig'
   | 'pdfProvidersConfig'
@@ -24,7 +22,6 @@ type ConfigKey =
 
 const SECRET_CONFIGS: Array<{ scope: SecretScope; key: ConfigKey }> = [
   { scope: 'llm', key: 'providersConfig' },
-  { scope: 'lightweight-llm', key: 'lightweightProvidersConfig' },
   { scope: 'tts', key: 'ttsProvidersConfig' },
   { scope: 'asr', key: 'asrProvidersConfig' },
   { scope: 'pdf', key: 'pdfProvidersConfig' },
