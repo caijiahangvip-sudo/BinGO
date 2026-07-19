@@ -17,3 +17,8 @@ commands.allow = ["desktop_secret_read", "desktop_secret_write", "desktop_secret
 identifier = "allow-desktop-runtime-status"
 description = "Allows the BinGO desktop window to inspect its local runtime and open the log folder."
 commands.allow = ["desktop_runtime_status", "desktop_open_log_dir"]
+
+[[permission]]
+identifier = "allow-desktop-profile-export"
+description = "Allows the BinGO desktop window to export and reveal the user learning profile."
+commands.allow = ["desktop_profile_directory", "desktop_choose_directory", "desktop_save_profile", "desktop_reveal_file"]

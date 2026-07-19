@@ -16,6 +16,7 @@
     "allow-start-bingo-server",
     "allow-desktop-secrets",
     "allow-desktop-runtime-status",
+    "allow-desktop-profile-export",
     "process:allow-restart",
     "updater:default"
   ]
