@@ -56,9 +56,27 @@ interface CatalogCache {
   items: TextbookListItem[];
   expiresAt: number;
   updatedAt: number;
+  authKey: string;
 }
 
 let catalogCache: CatalogCache | undefined;
+
+export type TextbookErrorCode =
+  | 'NETWORK_ERROR'
+  | 'AUTH_REQUIRED'
+  | 'UPSTREAM_ERROR'
+  | 'RESOURCE_NOT_FOUND';
+
+export class TextbookError extends Error {
+  constructor(
+    public readonly code: TextbookErrorCode,
+    message: string,
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'TextbookError';
+  }
+}
 
 function authHeaders(accessToken?: string): HeadersInit {
   const token = accessToken?.trim();
@@ -67,13 +85,31 @@ function authHeaders(accessToken?: string): HeadersInit {
 }
 
 async function fetchJson<T>(url: string, accessToken?: string): Promise<T> {
-  const response = await proxyFetch(url, {
-    headers: authHeaders(accessToken),
-    cache: 'no-store',
-  });
+  let response: Response;
+  try {
+    response = await proxyFetch(url, {
+      headers: authHeaders(accessToken),
+      cache: 'no-store',
+    });
+  } catch (error) {
+    throw new TextbookError(
+      'NETWORK_ERROR',
+      error instanceof Error ? error.message : 'Unable to reach textbook platform.',
+    );
+  }
 
   if (!response.ok) {
-    throw new Error(`Textbook upstream request failed: ${response.status} ${response.statusText}`);
+    const code: TextbookErrorCode =
+      response.status === 401 || response.status === 403
+        ? 'AUTH_REQUIRED'
+        : response.status === 404
+          ? 'RESOURCE_NOT_FOUND'
+          : 'UPSTREAM_ERROR';
+    throw new TextbookError(
+      code,
+      `Textbook upstream request failed: ${response.status} ${response.statusText}`,
+      response.status,
+    );
   }
 
   return (await response.json()) as T;
@@ -184,13 +220,13 @@ function attachBook(root: TextbookCatalogNode, book: YktTextbookRecord): void {
   ensureChildren(current).push(leaf);
 }
 
-async function buildCatalog(): Promise<CatalogCache> {
+async function buildCatalog(accessToken?: string): Promise<CatalogCache> {
   const tagsData = await fetchJson<{
     hierarchies?: Array<{ children?: YktTagNode[] }>;
-  }>(TAGS_URL);
+  }>(TAGS_URL, accessToken);
   const topLevel = parseHierarchyChildren(tagsData.hierarchies);
 
-  const versionData = await fetchJson<{ urls?: string | string[] }>(VERSION_URL);
+  const versionData = await fetchJson<{ urls?: string | string[] }>(VERSION_URL, accessToken);
   const partUrls = Array.isArray(versionData.urls)
     ? versionData.urls
     : String(versionData.urls || '')
@@ -201,7 +237,7 @@ async function buildCatalog(): Promise<CatalogCache> {
   const rootMap = new Map(topLevel.map((node) => [node.id, node]));
 
   for (const partUrl of partUrls) {
-    const books = await fetchJson<YktTextbookRecord[]>(partUrl);
+    const books = await fetchJson<YktTextbookRecord[]>(partUrl, accessToken);
     for (const book of books) {
       const rootId = book.tag_paths?.[0]?.split('/')[1];
       const root = rootId ? rootMap.get(rootId) : undefined;
@@ -215,15 +251,17 @@ async function buildCatalog(): Promise<CatalogCache> {
     items: flattenTextbooks(catalog),
     expiresAt: Date.now() + CACHE_TTL_MS,
     updatedAt: Date.now(),
+    authKey: accessToken?.trim() ? 'authenticated' : 'public',
   };
 }
 
-export async function getTextbookCatalog(): Promise<CatalogCache> {
-  if (catalogCache && catalogCache.expiresAt > Date.now()) {
+export async function getTextbookCatalog(accessToken?: string): Promise<CatalogCache> {
+  const authKey = accessToken?.trim() ? 'authenticated' : 'public';
+  if (catalogCache && catalogCache.expiresAt > Date.now() && catalogCache.authKey === authKey) {
     return catalogCache;
   }
 
-  catalogCache = await buildCatalog();
+  catalogCache = await buildCatalog(accessToken);
   return catalogCache;
 }
 
@@ -243,8 +281,9 @@ function pathMatches(itemPathIds: string[], requestedPathIds: string[]): boolean
 export async function searchTextbooks(params: {
   q?: string;
   pathIds?: string[];
+  accessToken?: string;
 }): Promise<TextbookListItem[]> {
-  const cache = await getTextbookCatalog();
+  const cache = await getTextbookCatalog(params.accessToken);
   const query = normalizeSearchText(params.q || '');
   const pathIds = (params.pathIds || []).filter(Boolean);
 
@@ -342,17 +381,31 @@ export async function downloadTextbookPdf(params: {
   accessToken?: string;
 }): Promise<NextResponse> {
   const resolved = await resolveTextbookDownload(params);
-  const response = await proxyFetch(resolved.url, {
-    headers: authHeaders(params.accessToken),
-    cache: 'no-store',
-  });
+  let response: Response;
+  try {
+    response = await proxyFetch(resolved.url, {
+      headers: authHeaders(params.accessToken),
+      cache: 'no-store',
+    });
+  } catch (error) {
+    throw new TextbookError(
+      'NETWORK_ERROR',
+      error instanceof Error ? error.message : 'Unable to download textbook PDF.',
+    );
+  }
 
   if (!response.ok || !response.body) {
+    const code: TextbookErrorCode =
+      response.status === 401 || response.status === 403 ? 'AUTH_REQUIRED' : 'UPSTREAM_ERROR';
     const authHint =
       response.status === 401 || response.status === 403
         ? ' Access Token may be required or expired.'
         : '';
-    throw new Error(`Textbook PDF download failed: ${response.status} ${response.statusText}.${authHint}`);
+    throw new TextbookError(
+      code,
+      `Textbook PDF download failed: ${response.status} ${response.statusText}.${authHint}`,
+      response.status,
+    );
   }
 
   const headers = new Headers();

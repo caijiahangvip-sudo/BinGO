@@ -45,6 +45,12 @@ export function TextbookLibraryDialog({
         importPdf: '下载并导入',
         imported: '已导入教材 PDF',
         downloadFailed: '教材下载失败',
+        networkFailed: '无法连接教材平台，请检查网络后重试。',
+        authRequired: '教材平台会话无效，请先在 BinGO 内完成登录。',
+        openPlatform: '打开平台登录',
+        openDownloader: '打开教材下载器',
+        downloaderOpened: '教材下载器已启动',
+        downloaderFailed: '教材下载器启动失败',
         tooLarge: '教材 PDF 超过 50 MB，无法作为当前附件导入。',
       }
     : {
@@ -60,6 +66,12 @@ export function TextbookLibraryDialog({
         importPdf: 'Download and import',
         imported: 'Textbook PDF imported',
         downloadFailed: 'Failed to download textbook',
+        networkFailed: 'Unable to reach the textbook platform. Check your network and retry.',
+        authRequired: 'The textbook session is missing or expired. Sign in inside BinGO first.',
+        openPlatform: 'Open platform login',
+        openDownloader: 'Open textbook downloader',
+        downloaderOpened: 'Textbook downloader started',
+        downloaderFailed: 'Failed to start textbook downloader',
         tooLarge:
           'The textbook PDF exceeds 50 MB and cannot be imported as the current attachment.',
       };
@@ -72,6 +84,24 @@ export function TextbookLibraryDialog({
   const [loadingResults, setLoadingResults] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  const getFriendlyError = (err: unknown, fallback: string) => {
+    const message = err instanceof Error ? err.message : '';
+    if (/NETWORK_ERROR|fetch failed|network/i.test(message)) return copy.networkFailed;
+    if (/AUTH_REQUIRED|401|403|session|token/i.test(message)) return copy.authRequired;
+    return message || fallback;
+  };
+
+  const launchDownloader = async () => {
+    try {
+      const response = await fetch('/api/textbook-downloader/launch', { method: 'POST' });
+      const data = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
+      if (!response.ok) throw new Error(data.details || data.error || copy.downloaderFailed);
+      toast.success(copy.downloaderOpened);
+    } catch (err) {
+      toast.error(getFriendlyError(err, copy.downloaderFailed));
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -129,7 +159,7 @@ export function TextbookLibraryDialog({
         })
         .catch((err) => {
           if (controller.signal.aborted) return;
-          setError(err instanceof Error ? err.message : copy.catalogFailed);
+          setError(getFriendlyError(err, copy.catalogFailed));
         })
         .finally(() => {
           if (!controller.signal.aborted) setLoadingResults(false);
@@ -181,7 +211,7 @@ export function TextbookLibraryDialog({
       toast.success(copy.imported);
       onOpenChange(false);
     } catch (err) {
-      const message = err instanceof Error ? err.message : copy.downloadFailed;
+      const message = getFriendlyError(err, copy.downloadFailed);
       setError(message);
       toast.error(message);
     } finally {
@@ -203,6 +233,14 @@ export function TextbookLibraryDialog({
                 <h2 className="text-base font-semibold">{copy.title}</h2>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">{copy.description}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => window.open('https://basic.smartedu.cn/', '_blank', 'noopener,noreferrer')}>
+                  {copy.openPlatform}
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={launchDownloader}>
+                  {copy.openDownloader}
+                </Button>
+              </div>
             </div>
           </div>
         </div>

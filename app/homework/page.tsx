@@ -586,8 +586,8 @@ export default function HomeworkPage() {
   const solveProgress = Math.max(0, Math.min(100, solveJob?.progress ?? 0));
 
   return (
-    <main className="min-h-[100dvh] bg-slate-50 text-slate-900 lg:h-[100dvh] lg:overflow-hidden dark:bg-slate-950 dark:text-slate-100">
-      <div className="mx-auto flex min-h-[100dvh] max-w-7xl flex-col px-4 py-4 lg:h-full lg:min-h-0">
+    <main className="min-h-[100dvh] bg-[#f7f7fa] text-[#1d1d1f] lg:h-[100dvh] lg:overflow-hidden dark:bg-[#1c1c1e] dark:text-[#f5f5f7]">
+      <div className="mx-auto flex min-h-[100dvh] max-w-[1440px] flex-col px-5 py-5 lg:h-full lg:min-h-0">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800">
           <div className="flex items-center gap-3">
             <Button variant="outline" size="icon" onClick={() => router.push('/')}>
@@ -626,9 +626,16 @@ export default function HomeworkPage() {
           </div>
         </header>
 
-        <div className="grid flex-1 gap-4 py-4 lg:min-h-0 lg:grid-cols-[340px_minmax(0,1fr)_380px]">
+        <div
+          className={cn(
+            'grid flex-1 gap-4 py-5 lg:min-h-0',
+            selectedQuestion
+              ? 'lg:grid-cols-[260px_minmax(0,1fr)_minmax(280px,320px)]'
+              : 'lg:grid-cols-[260px_minmax(0,1fr)_220px]',
+          )}
+        >
           <aside className="flex flex-col gap-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
-            <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <section className="rounded-2xl border border-[#e5e5ea] bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)] dark:border-[#48484a] dark:bg-[#2c2c2e]">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -646,7 +653,7 @@ export default function HomeworkPage() {
                   'flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-md border-2 border-dashed p-4 text-center transition-colors',
                   isDragging
                     ? 'border-violet-400 bg-violet-50 dark:bg-violet-400/10'
-                    : 'border-slate-200 hover:border-violet-300 dark:border-slate-700',
+                    : 'border-[#d1d1d6] hover:border-[#007aff] dark:border-[#48484a]',
                 )}
                 onClick={() => fileInputRef.current?.click()}
                 onDragOver={(event) => {
@@ -661,7 +668,7 @@ export default function HomeworkPage() {
                   if (dropped?.length) handleFiles(dropped);
                 }}
               >
-                <Upload className="mb-3 size-7 text-violet-500" />
+                <Upload className="mb-3 size-7 text-[#007aff]" />
                 <div className="text-sm font-medium">
                   {files.length > 0
                     ? isZh
@@ -719,7 +726,7 @@ export default function HomeworkPage() {
             </section>
 
             {recentSessions.length > 0 && (
-              <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <section className="rounded-2xl border border-[#e5e5ea] bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)] dark:border-[#48484a] dark:bg-[#2c2c2e]">
                 <h2 className="mb-3 text-sm font-semibold">{isZh ? '最近作业' : 'Recent'}</h2>
                 <div className="grid gap-2">
                   {recentSessions.map((item) => (
@@ -743,7 +750,7 @@ export default function HomeworkPage() {
             )}
           </aside>
 
-          <section className="flex min-h-[60dvh] flex-col overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm lg:min-h-0 dark:border-slate-800 dark:bg-slate-900">
+          <section className="flex min-h-[60dvh] flex-col overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)] lg:min-h-0 dark:border-[#48484a] dark:bg-[#2c2c2e]">
             {isSolving ? (
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="border-b border-slate-200 p-4 dark:border-slate-800">
@@ -957,7 +964,12 @@ export default function HomeworkPage() {
             )}
           </section>
 
-          <aside className="flex min-h-[60dvh] flex-col rounded-md border border-slate-200 bg-white shadow-sm lg:min-h-0 dark:border-slate-800 dark:bg-slate-900">
+          <aside
+            className={cn(
+              'flex min-h-[60dvh] flex-col rounded-2xl border border-[#e5e5ea] bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)] lg:min-h-0 dark:border-[#48484a] dark:bg-[#2c2c2e]',
+              !selectedQuestion && 'lg:min-h-0',
+            )}
+          >
             <div className="border-b border-slate-200 p-4 dark:border-slate-800">
               <h2 className="text-sm font-semibold">{isZh ? '追问讲解' : 'Ask About It'}</h2>
               <p className="mt-1 text-xs text-slate-500">
@@ -991,7 +1003,7 @@ export default function HomeworkPage() {
                   )}
                 </div>
               ) : (
-                <div className="flex h-full items-center justify-center text-center text-sm text-slate-500">
+                <div className="flex h-full min-h-40 items-center justify-center px-6 text-center text-sm text-[#6e6e73] dark:text-[#aeaeb2]">
                   {isZh
                     ? '对完答案后，不懂的地方直接问。'
                     : 'After checking answers, ask about anything unclear.'}

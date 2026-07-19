@@ -226,6 +226,14 @@ describe('getTextbookCatalog', () => {
 
     await expect(getTextbookCatalog()).rejects.toThrow(/Textbook upstream request failed: 502/);
   });
+
+  it('classifies transport failures as NETWORK_ERROR', async () => {
+    const { proxyFetch } = (await import('@/lib/server/proxy-fetch')) as any;
+    proxyFetch.mockRejectedValueOnce(new Error('fetch failed'));
+    const { getTextbookCatalog } = await import('@/lib/server/textbooks');
+
+    await expect(getTextbookCatalog()).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+  });
 });
 
 describe('searchTextbooks', () => {
@@ -324,5 +332,20 @@ describe('downloadTextbookPdf', () => {
     await expect(downloadTextbookPdf({ contentId: 'book-1' })).rejects.toThrow(
       /No downloadable PDF resource found/,
     );
+  });
+
+  it('classifies 401 and 403 resource responses as AUTH_REQUIRED', async () => {
+    const { proxyFetch } = (await import('@/lib/server/proxy-fetch')) as any;
+    proxyFetch.mockImplementation(async (url: string) => {
+      fetchCalls.push(url);
+      if (url.includes('details/book-1.json')) return errorResponse(403, 'Forbidden');
+      return errorResponse(404, 'Not Found');
+    });
+
+    const { downloadTextbookPdf } = await import('@/lib/server/textbooks');
+
+    await expect(downloadTextbookPdf({ contentId: 'book-1' })).rejects.toMatchObject({
+      code: 'AUTH_REQUIRED',
+    });
   });
 });

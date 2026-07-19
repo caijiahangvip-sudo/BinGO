@@ -25,6 +25,14 @@ import { createLogger } from '@/lib/logger';
 import { LocalRuntimeDiagnostics } from './local-runtime-diagnostics';
 import { DesktopUpdateSettings } from './desktop-update-settings';
 
+type DesktopInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+
+function getDesktopInvoke(): DesktopInvoke | null {
+  const tauri = (window as Window & { __TAURI_INTERNALS__?: { invoke?: DesktopInvoke } })
+    .__TAURI_INTERNALS__;
+  return tauri?.invoke ?? null;
+}
+
 const log = createLogger('GeneralSettings');
 const BACKUP_FILENAME = 'bingo-user-backup.zip';
 const USER_PROFILE_FILENAME = 'bingo-user-profile.json';
@@ -68,6 +76,10 @@ export function GeneralSettings() {
             profileDescription: '导出学生资料、学习画像、知识点掌握情况、作业记录和学习证据。',
             exportProfile: '导出用户画像',
             exportProfileSuccess: '用户画像已导出',
+            exportProfileToDesktop: '导出到桌面',
+            chooseExportFolder: '选择导出位置',
+            revealExport: '打开所在文件夹',
+            exportProfileLocation: '导出位置',
             exportProfileFailed: '导出用户画像失败',
             export: '导出备份',
             import: '导入备份',
@@ -93,6 +105,10 @@ export function GeneralSettings() {
               'Export student profile, learning profile, knowledge mastery, homework sessions, and evidence records.',
             exportProfile: 'Export profile',
             exportProfileSuccess: 'User profile exported',
+            exportProfileToDesktop: 'Export to Desktop',
+            chooseExportFolder: 'Choose export folder',
+            revealExport: 'Show in folder',
+            exportProfileLocation: 'Export location',
             exportProfileFailed: 'Failed to export user profile',
             export: 'Export backup',
             import: 'Import backup',
@@ -145,19 +161,37 @@ export function GeneralSettings() {
     }
   }, [copy.exportFailed, copy.exportSuccess]);
 
-  const handleExportProfile = useCallback(async () => {
+  const handleExportProfile = useCallback(async (chooseFolder = false) => {
     setExportingProfile(true);
     try {
       const blob = await exportUserLearningProfileJson();
-      downloadBlob(blob, USER_PROFILE_FILENAME);
-      toast.success(copy.exportProfileSuccess);
+      const invoke = getDesktopInvoke();
+      let targetDirectory: string | null = null;
+      if (invoke) {
+        targetDirectory = chooseFolder
+          ? await invoke<string | null>('desktop_choose_directory')
+          : await invoke<string>('desktop_profile_directory');
+        if (!targetDirectory) return;
+        const targetPath = `${targetDirectory.replace(/[\\/]$/, '')}\\${USER_PROFILE_FILENAME}`;
+        const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
+        await invoke('desktop_save_profile', { path: targetPath, data: bytes });
+        toast.success(`${copy.exportProfileSuccess}: ${targetPath}`, {
+          action: {
+            label: copy.revealExport,
+            onClick: () => void invoke('desktop_reveal_file', { path: targetPath }),
+          },
+        });
+      } else {
+        downloadBlob(blob, USER_PROFILE_FILENAME);
+        toast.success(copy.exportProfileSuccess);
+      }
     } catch (error) {
       log.error('Failed to export user profile:', error);
       toast.error(copy.exportProfileFailed);
     } finally {
       setExportingProfile(false);
     }
-  }, [copy.exportProfileFailed, copy.exportProfileSuccess]);
+  }, [copy.exportProfileFailed, copy.exportProfileSuccess, copy.revealExport]);
 
   const handleImportFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
@@ -283,19 +317,29 @@ export function GeneralSettings() {
                 {copy.profileDescription}
               </p>
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={exportingProfile}
-              onClick={handleExportProfile}
-            >
-              {exportingProfile ? (
-                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-              ) : (
-                <Download className="w-3.5 h-3.5 mr-1.5" />
-              )}
-              {copy.exportProfile}
-            </Button>
+            <div className="flex shrink-0 gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={exportingProfile}
+                onClick={() => handleExportProfile(false)}
+              >
+                {exportingProfile ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <Download className="w-3.5 h-3.5 mr-1.5" />
+                )}
+                {copy.exportProfileToDesktop}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={exportingProfile}
+                onClick={() => handleExportProfile(true)}
+              >
+                {copy.chooseExportFolder}
+              </Button>
+            </div>
           </div>
         </div>
       </div>

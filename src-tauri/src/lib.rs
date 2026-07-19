@@ -432,6 +432,59 @@ fn desktop_open_log_dir(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn desktop_profile_directory(app: AppHandle) -> Result<String, String> {
+  app.path()
+    .desktop_dir()
+    .map(|path| path.display().to_string())
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn desktop_choose_directory() -> Result<Option<String>, String> {
+  #[cfg(target_os = "windows")]
+  {
+    let script = "Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; $dialog.Description = '选择导出文件夹'; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.SelectedPath }";
+    let output = Command::new("powershell.exe")
+      .args(["-NoProfile", "-STA", "-Command", script])
+      .output()
+      .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+      return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    return Ok((!path.is_empty()).then_some(path));
+  }
+  #[cfg(not(target_os = "windows"))]
+  Err("目录选择仅支持桌面客户端 Windows 环境".into())
+}
+
+#[tauri::command]
+fn desktop_save_profile(path: String, data: Vec<u8>) -> Result<(), String> {
+  let target = PathBuf::from(path);
+  if target.extension().and_then(|value| value.to_str()) != Some("json") {
+    return Err("导出文件必须是 JSON 文件".into());
+  }
+  if let Some(parent) = target.parent() {
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+  }
+  fs::write(target, data).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn desktop_reveal_file(path: String) -> Result<(), String> {
+  #[cfg(target_os = "windows")]
+  {
+    Command::new("explorer.exe")
+      .args(["/select,", &path])
+      .spawn()
+      .map_err(|error| error.to_string())?;
+    return Ok(());
+  }
+  #[cfg(not(target_os = "windows"))]
+  Err("文件定位仅支持桌面客户端 Windows 环境".into())
+}
+
+#[tauri::command]
 fn desktop_secret_write(scope: String, provider_id: String, value: String) -> Result<(), String> {
   #[cfg(target_os = "windows")]
   {
@@ -590,7 +643,11 @@ pub fn run() {
       desktop_secret_write,
       desktop_secret_delete,
       desktop_runtime_status,
-      desktop_open_log_dir
+      desktop_open_log_dir,
+      desktop_profile_directory,
+      desktop_choose_directory,
+      desktop_save_profile,
+      desktop_reveal_file
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
