@@ -130,13 +130,12 @@ export class TTSRateLimitError extends Error {
 }
 
 const COSYVOICE_LOCAL_SAMPLE_RATE = 24000;
-const COSYVOICE_DEFAULT_PROMPT_WAV = path.join(
-  process.cwd(),
-  'dev',
-  'CosyVoice',
-  'asset',
-  'zero_shot_prompt.wav',
-);
+const COSYVOICE_DEFAULT_PROMPT_WAV_CANDIDATES = [
+  process.env.BINGO_PROJECT_ROOT &&
+    path.join(process.env.BINGO_PROJECT_ROOT, 'dev', 'CosyVoice', 'asset', 'zero_shot_prompt.wav'),
+  path.join(process.cwd(), 'dev', 'CosyVoice', 'asset', 'zero_shot_prompt.wav'),
+  path.join(process.cwd(), 'CosyVoice', 'asset', 'zero_shot_prompt.wav'),
+].filter((value): value is string => Boolean(value));
 
 function createWavFromPcm16(pcm: Uint8Array, sampleRate: number): Uint8Array {
   const header = new ArrayBuffer(44);
@@ -418,7 +417,10 @@ async function generateCosyVoiceTTS(
   const promptText = cloneVoice
     ? formatCosyVoicePromptText(cloneVoice.promptText)
     : COSYVOICE_DEFAULT_PROMPT_TEXT;
-  const promptAudioPath = cloneVoice?.promptAudioPath || COSYVOICE_DEFAULT_PROMPT_WAV;
+  const promptAudioPath =
+    cloneVoice?.promptAudioPath ||
+    COSYVOICE_DEFAULT_PROMPT_WAV_CANDIDATES.find((candidate) => fs.existsSync(candidate)) ||
+    COSYVOICE_DEFAULT_PROMPT_WAV_CANDIDATES[0];
   formData.set('prompt_text', promptText);
 
   const promptWav = await fs.promises.readFile(promptAudioPath).catch((error) => {

@@ -175,6 +175,8 @@ async function prepareStandalone() {
   await copyIfPresent(join(root, 'public'), join(serverDist, 'public'));
   await copyIfPresent(join(root, 'scripts'), join(serverDist, 'scripts'));
   await copyIfPresent(join(root, 'data'), join(serverDist, 'data'));
+  await copyIfPresent(join(root, 'tools'), join(serverDist, 'tools'));
+  await copyIfPresent(join(root, 'dev', 'CosyVoice', 'asset'), join(serverDist, 'dev', 'CosyVoice', 'asset'));
   await ensureNextRuntime();
   await rm(join(serverDist, 'data', 'homework-jobs'), { recursive: true, force: true });
   await rm(join(serverDist, 'public', 'fonts', 'custom'), { recursive: true, force: true });

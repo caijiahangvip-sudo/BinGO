@@ -271,26 +271,29 @@ function GenerationPreviewContent() {
           parseFormData.append('baseUrl', currentSession.pdfProviderConfig.baseUrl);
         }
 
-        const parseResponse = await fetch('/api/parse-pdf', {
-          method: 'POST',
-          body: parseFormData,
-          signal,
-        });
-
-        const parseResult = await readApiJson<ParsePdfApiResponse>(
-          parseResponse,
-          t('generation.pdfParseFailed'),
-        );
-
-        if (!parseResponse.ok) {
-          throw new Error(parseResult.error || t('generation.pdfParseFailed'));
+        let parsedPdfData: ParsePdfData;
+        try {
+          const parseResponse = await fetch('/api/parse-pdf', {
+            method: 'POST',
+            body: parseFormData,
+            signal,
+          });
+          const parseResult = await readApiJson<ParsePdfApiResponse>(
+            parseResponse,
+            t('generation.pdfParseFailed'),
+          );
+          if (!parseResponse.ok || !parseResult.success || !isParsePdfData(parseResult.data)) {
+            throw new Error(parseResult.error || t('generation.pdfParseFailed'));
+          }
+          parsedPdfData = parseResult.data;
+        } catch (parseError) {
+          if (signal.aborted) throw parseError;
+          log.warn('PDF parsing failed; continuing classroom generation with the lesson request.', parseError);
+          parsedPdfData = {
+            text: currentSession.requirements.requirement || currentSession.pdfFileName || '',
+            images: [],
+          };
         }
-
-        if (!parseResult.success || !isParsePdfData(parseResult.data)) {
-          throw new Error(t('generation.pdfParseFailed'));
-        }
-
-        const parsedPdfData = parseResult.data;
 
         let pdfText = parsedPdfData.text;
 

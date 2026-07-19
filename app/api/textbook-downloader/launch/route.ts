@@ -18,10 +18,13 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 async function resolveDownloaderPath(): Promise<string | null> {
   const configuredPath = process.env.TEXTBOOK_DOWNLOADER_EXE_PATH?.trim();
+  const projectRoot = process.env.BINGO_PROJECT_ROOT?.trim();
   const candidates = [
     configuredPath,
+    projectRoot && path.join(projectRoot, 'tools', 'textbook-downloader', EXE_NAME),
     path.join(process.cwd(), 'tools', 'textbook-downloader', EXE_NAME),
     path.join(process.cwd(), '..', 'tools', 'textbook-downloader', EXE_NAME),
+    path.join(process.cwd(), '..', '..', 'tools', 'textbook-downloader', EXE_NAME),
   ].filter((candidate): candidate is string => Boolean(candidate));
 
   for (const candidate of candidates) {

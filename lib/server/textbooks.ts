@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import sharp from 'sharp';
 import { proxyFetch } from '@/lib/server/proxy-fetch';
 import type { TextbookCatalogNode, TextbookListItem } from '@/lib/textbooks/types';
 
@@ -41,6 +42,9 @@ interface YktTextbookRecord {
 interface YktTextbookDetail {
   title?: string;
   ti_items?: YktResourceItem[];
+  custom_properties?: {
+    preview?: Record<string, string>;
+  };
 }
 
 interface YktResourceItem {
@@ -343,6 +347,66 @@ function sanitizeFilename(value: string): string {
   return value.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim() || 'textbook';
 }
 
+function orderedPreviewUrls(detail: YktTextbookDetail): string[] {
+  return Object.entries(detail.custom_properties?.preview || {})
+    .map(([key, url]) => ({ page: Number(key.replace(/\D+/g, '')), url }))
+    .filter((item) => Number.isFinite(item.page) && /^https?:\/\//i.test(item.url))
+    .sort((a, b) => a.page - b.page)
+    .map((item) => item.url);
+}
+
+async function buildPdfFromPreviewImages(urls: string[]): Promise<Buffer> {
+  const images = await Promise.all(
+    urls.map(async (url) => {
+      const response = await proxyFetch(url, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`教材页面下载失败：HTTP ${response.status}`);
+      const bytes = Buffer.from(await response.arrayBuffer());
+      const metadata = await sharp(bytes).metadata();
+      if (!metadata.width || !metadata.height || metadata.format !== 'jpeg') {
+        throw new Error('教材页面图片格式无效');
+      }
+      return { bytes, width: metadata.width, height: metadata.height };
+    }),
+  );
+
+  const objects: Buffer[] = [];
+  const addObject = (body: Buffer | string) => {
+    objects.push(Buffer.isBuffer(body) ? body : Buffer.from(body, 'binary'));
+    return objects.length;
+  };
+  const catalogId = addObject('');
+  const pagesId = addObject('');
+  const pageIds: number[] = [];
+
+  for (const [index, image] of images.entries()) {
+    const imageId = addObject(Buffer.concat([
+      Buffer.from(`<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.bytes.length} >>\nstream\n`, 'binary'),
+      image.bytes,
+      Buffer.from('\nendstream', 'binary'),
+    ]));
+    const content = `q\n${image.width} 0 0 ${image.height} 0 0 cm\n/Im${index} Do\nQ`;
+    const contentId = addObject(`<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`);
+    pageIds.push(addObject(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${image.width} ${image.height}] /Resources << /XObject << /Im${index} ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`));
+  }
+
+  objects[catalogId - 1] = Buffer.from(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`, 'binary');
+  objects[pagesId - 1] = Buffer.from(`<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] >>`, 'binary');
+
+  const chunks = [Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'binary')];
+  const offsets = [0];
+  let offset = chunks[0].length;
+  objects.forEach((object, index) => {
+    offsets.push(offset);
+    const chunk = Buffer.concat([Buffer.from(`${index + 1} 0 obj\n`, 'binary'), object, Buffer.from('\nendobj\n', 'binary')]);
+    chunks.push(chunk);
+    offset += chunk.length;
+  });
+  const xrefOffset = offset;
+  const xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map((value) => `${String(value).padStart(10, '0')} 00000 n `).join('\n')}\ntrailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  chunks.push(Buffer.from(xref, 'binary'));
+  return Buffer.concat(chunks);
+}
+
 async function resolveTextbookDownload(params: {
   contentId: string;
   contentType?: string;
@@ -380,6 +444,11 @@ export async function downloadTextbookPdf(params: {
   contentType?: string;
   accessToken?: string;
 }): Promise<NextResponse> {
+  const contentType = params.contentType || 'assets_document';
+  const detailUrl = contentType === 'thematic_course'
+    ? `${SPECIAL_DETAIL_BASE_URL}/${encodeURIComponent(params.contentId)}.json`
+    : `${DETAIL_BASE_URL}/${encodeURIComponent(params.contentId)}.json`;
+  const detail = await fetchJson<YktTextbookDetail>(detailUrl, params.accessToken);
   const resolved = await resolveTextbookDownload(params);
   let response: Response;
   try {
@@ -388,6 +457,18 @@ export async function downloadTextbookPdf(params: {
       cache: 'no-store',
     });
   } catch (error) {
+    const previewUrls = orderedPreviewUrls(detail);
+    if (previewUrls.length > 0) {
+      const pdf = await buildPdfFromPreviewImages(previewUrls);
+      return new NextResponse(new Uint8Array(pdf), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Length': String(pdf.length),
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${sanitizeFilename(detail.title || params.contentId)}.pdf`)}`,
+        },
+      });
+    }
     throw new TextbookError(
       'NETWORK_ERROR',
       error instanceof Error ? error.message : 'Unable to download textbook PDF.',
@@ -395,6 +476,18 @@ export async function downloadTextbookPdf(params: {
   }
 
   if (!response.ok || !response.body) {
+    const previewUrls = orderedPreviewUrls(detail);
+    if (previewUrls.length > 0) {
+      const pdf = await buildPdfFromPreviewImages(previewUrls);
+      return new NextResponse(new Uint8Array(pdf), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Length': String(pdf.length),
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${sanitizeFilename(detail.title || params.contentId)}.pdf`)}`,
+        },
+      });
+    }
     const code: TextbookErrorCode =
       response.status === 401 || response.status === 403 ? 'AUTH_REQUIRED' : 'UPSTREAM_ERROR';
     const authHint =

@@ -153,6 +153,16 @@ fn wait_until_ready(
 
 fn runtime_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
   let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
+  #[cfg(debug_assertions)]
+  let resources = {
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let workspace_server = workspace_root.join("desktop-dist").join("server");
+    let workspace_node = workspace_root.join("src-tauri").join("binaries").join("node.exe");
+    if workspace_server.join("server.js").exists() && workspace_node.exists() {
+      return Ok((workspace_server, workspace_node, app.path().local_data_dir().map_err(|error| error.to_string())?.join("BinGO-Data")));
+    }
+    resources
+  };
   let data = app.path().local_data_dir().map_err(|error| error.to_string())?.join("BinGO-Data");
   Ok((resources.join("server"), resources.join("binaries").join("node.exe"), data))
 }
@@ -577,6 +587,10 @@ async fn start_bingo_server(app: AppHandle) -> Result<(), String> {
       .env("BINGO_DESKTOP", "1")
       .env("BINGO_DESKTOP_TOKEN", &session_token)
       .env("npm_package_version", &version)
+      .env(
+        "BINGO_PROJECT_ROOT",
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").display().to_string(),
+      )
       .stdin(Stdio::null())
       .stdout(Stdio::from(stdout))
       .stderr(Stdio::from(stderr));
