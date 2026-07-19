@@ -442,29 +442,29 @@ Function un.PageConfirm
     Abort
   ${EndIf}
 
-  !insertmacro MUI_HEADER_TEXT "${PRODUCTNAME} $(uninstall)" "Choose the BinGO folder to uninstall."
+  !insertmacro MUI_HEADER_TEXT "卸载 ${PRODUCTNAME}" "选择要卸载的 BinGO 文件夹"
 
-  ${NSD_CreateLabel} 0 0 100% 24u "${PRODUCTNAME} will be uninstalled from the folder below. Click Browse to select a different location (e.g. a legacy install folder)."
+  ${NSD_CreateLabel} 0 0 100% 30u "${PRODUCTNAME} 将从下面的文件夹中卸载。若要更换位置，请点击“浏览...”选择其他文件夹。"
   Pop $0
 
-  ${NSD_CreateLabel} 0 32u 80u 12u "Uninstalling from:"
+  ${NSD_CreateLabel} 0 40u 95u 12u "卸载位置："
   Pop $0
 
-  ${NSD_CreateText} 85u 30u -155u 14u "$INSTDIR"
+  ${NSD_CreateText} 100u 38u -155u 14u "$INSTDIR"
   Pop $UninstallDirField
 
-  ${NSD_CreateButton} -145u 29u 135u 16u "Browse..."
+  ${NSD_CreateButton} -145u 37u 135u 16u "浏览..."
   Pop $BrowseBtn
   ${NSD_OnClick} $BrowseBtn un.OnBrowse
 
-  ${NSD_CreateCheckbox} 0 60u 100% 12u "$(deleteAppData)"
+  ${NSD_CreateCheckbox} 0 68u 100% 12u "删除应用数据"
   Pop $DeleteAppDataCheckbox
 
   nsDialogs::Show
 FunctionEnd
 
 Function un.OnBrowse
-  nsDialogs::SelectFolderDialog "Select BinGO folder to uninstall" "$INSTDIR"
+  nsDialogs::SelectFolderDialog "选择要卸载的 BinGO 文件夹" "$INSTDIR"
   Pop $0
   ${If} $0 != "error"
   ${AndIf} $0 != ""

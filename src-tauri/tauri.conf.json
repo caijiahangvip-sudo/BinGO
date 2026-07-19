@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "BinGO",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "identifier": "app.bingo.desktop",
   "build": {
     "frontendDist": "../desktop-loader",
@@ -39,6 +39,7 @@
     "windows": {
       "nsis": {
         "installMode": "both",
+        "languages": ["SimpChinese"],
         "displayLanguageSelector": false,
         "installerHooks": "windows/installer-hooks.nsh",
         "template": "nsis/installer.nsi"
