@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "BinGO",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "identifier": "app.bingo.desktop",
   "build": {
     "frontendDist": "../desktop-loader",
@@ -40,7 +40,8 @@
       "nsis": {
         "installMode": "both",
         "displayLanguageSelector": false,
-        "installerHooks": "windows/installer-hooks.nsh"
+        "installerHooks": "windows/installer-hooks.nsh",
+        "template": "nsis/installer.nsi"
       }
     },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"]
