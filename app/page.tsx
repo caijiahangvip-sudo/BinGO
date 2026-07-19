@@ -71,6 +71,10 @@ import { useTourStore } from '@/lib/store/tour';
 import { trackEvent } from '@/lib/telemetry';
 import { COLOR_THEME_PRESETS } from '@/lib/theme/color-themes';
 import { getCurrentColorTheme } from '@/lib/theme/theme-runtime';
+import {
+  getBookPlanProgressView,
+  type BookPlanProgressPhase,
+} from '@/lib/generation/book-plan-progress';
 
 const log = createLogger('Home');
 
@@ -277,6 +281,7 @@ function HomePage() {
   const [activeBookPlan, setActiveBookPlan] = useState<BookLearningPlan | null>(null);
   const [bookShelfOpen, setBookShelfOpen] = useState(false);
   const [isCreatingBookPlan, setIsCreatingBookPlan] = useState(false);
+  const [bookPlanPhase, setBookPlanPhase] = useState<BookPlanProgressPhase>('idle');
   const [isDeletingBookPlan, setIsDeletingBookPlan] = useState(false);
   const [openingClassroomId, setOpeningClassroomId] = useState<string | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -683,6 +688,7 @@ function HomePage() {
 
     setError(null);
     setIsCreatingBookPlan(true);
+    setBookPlanPhase('parsing');
 
     try {
       const pdfStorageKey = await storePdfBlob(form.pdfFile);
@@ -739,6 +745,7 @@ function HomePage() {
       const coverImage =
         (await renderPdfCoverFromFile(form.pdfFile)) ?? getInlineParsedCoverImage(parseResult.data);
 
+      setBookPlanPhase('planning');
       const planResponse = await fetch('/api/generate/book-plan', {
         method: 'POST',
         headers: getApiHeaders(),
@@ -758,9 +765,11 @@ function HomePage() {
         throw new Error(planResult.error || 'Failed to generate the book learning plan');
       }
 
+      setBookPlanPhase('saving');
       await saveBookLearningPlan(planResult.plan);
       setActiveBookLearningPlanId(planResult.plan.id);
       setActiveBookPlan(planResult.plan);
+      setBookPlanPhase('complete');
       setBookPlans((current) => [
         planResult.plan!,
         ...current.filter((plan) => plan.id !== planResult.plan!.id),
@@ -771,9 +780,11 @@ function HomePage() {
       else toast.success('Book learning plan generated');
     } catch (err) {
       log.error('Failed to create book learning plan:', err);
+      setBookPlanPhase('error');
       setError(err instanceof Error ? err.message : 'Failed to generate the book learning plan');
     } finally {
       setIsCreatingBookPlan(false);
+      window.setTimeout(() => setBookPlanPhase('idle'), 1800);
     }
   };
 
@@ -788,6 +799,19 @@ function HomePage() {
   };
 
   const activeBookProgress = activeBookPlan ? getBookPlanProgress(activeBookPlan) : null;
+  const bookPlanProgress = getBookPlanProgressView(bookPlanPhase);
+  const bookPlanProgressLabel =
+    bookPlanPhase === 'parsing'
+      ? '正在解析教材'
+      : bookPlanPhase === 'planning'
+        ? '正在生成学习计划'
+        : bookPlanPhase === 'saving'
+          ? '正在保存学习计划'
+          : bookPlanPhase === 'complete'
+            ? '学习计划已生成'
+            : bookPlanPhase === 'error'
+              ? '学习计划生成失败'
+              : '';
   const completedLessons = activeBookProgress?.completedLessons ?? 0;
   const progressPercent = activeBookProgress?.progressPercent ?? 0;
   const nextBookLesson = activeBookProgress?.nextLesson ?? null;
@@ -1294,6 +1318,27 @@ function HomePage() {
               />
 
               {/* Toolbar row */}
+              {(isCreatingBookPlan || bookPlanPhase === 'complete' || bookPlanPhase === 'error') && (
+                <div className="mx-4 mb-3 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-left">
+                  <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span>{bookPlanProgressLabel}</span>
+                    <span>
+                      {bookPlanProgress.step}/{bookPlanProgress.total} · {bookPlanProgress.percent}%
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
+                    <motion.div
+                      className={cn(
+                        'h-full rounded-full',
+                        bookPlanPhase === 'error' ? 'bg-destructive' : 'bg-primary',
+                      )}
+                      initial={{ width: 0 }}
+                      animate={{ width: `${bookPlanProgress.percent}%` }}
+                      transition={{ duration: 0.35, ease: 'easeOut' }}
+                    />
+                  </div>
+                </div>
+              )}
               <div className="flex items-end gap-2 px-4 pb-4">
                 <div className="flex-1 min-w-0">
                   <GenerationToolbar
