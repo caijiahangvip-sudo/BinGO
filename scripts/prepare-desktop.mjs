@@ -123,6 +123,31 @@ async function pruneNextProductionRuntime() {
   await Promise.all(paths.map((relativePath) => rm(join(nextDist, relativePath), { recursive: true, force: true })));
 }
 
+async function ensureNextRuntime() {
+  const bundledNext = join(serverDist, 'node_modules', 'next');
+  if (await exists(join(bundledNext, 'package.json'))) return;
+
+  const sourceNext = join(root, 'node_modules', 'next');
+  if (!(await exists(join(sourceNext, 'package.json')))) {
+    throw new Error('Next runtime is missing from node_modules. Run `pnpm install` before preparing desktop assets.');
+  }
+
+  await mkdir(join(serverDist, 'node_modules'), { recursive: true });
+  await cp(sourceNext, bundledNext, { recursive: true, dereference: true });
+}
+
+async function validateStandaloneRuntime() {
+  const required = [
+    join(serverDist, 'node_modules', 'next', 'package.json'),
+    join(serverDist, 'node_modules', 'next', 'dist', 'server', 'lib', 'start-server.js'),
+  ];
+  for (const path of required) {
+    if (!(await exists(path))) {
+      throw new Error(`Desktop server runtime is incomplete: missing ${path}`);
+    }
+  }
+}
+
 async function copyIfPresent(source, destination) {
   if (await exists(source)) {
     await mkdir(dirname(destination), { recursive: true });
@@ -146,6 +171,7 @@ async function prepareStandalone() {
   await copyIfPresent(join(root, 'public'), join(serverDist, 'public'));
   await copyIfPresent(join(root, 'scripts'), join(serverDist, 'scripts'));
   await copyIfPresent(join(root, 'data'), join(serverDist, 'data'));
+  await ensureNextRuntime();
   await rm(join(serverDist, 'data', 'homework-jobs'), { recursive: true, force: true });
   await rm(join(serverDist, 'public', 'fonts', 'custom'), { recursive: true, force: true });
   await rm(join(serverDist, 'node_modules', 'typescript'), { recursive: true, force: true });
@@ -153,6 +179,7 @@ async function prepareStandalone() {
   await rm(join(serverDist, 'data', 'chinese-xinhua', 'data', 'ci.json.gz'), { force: true });
   await pruneNextProductionRuntime();
   await pruneDesktopRuntime(serverDist);
+  await validateStandaloneRuntime();
   console.log(`[desktop] Prepared BinGO ${packageJson.version} standalone server.`);
 }
 

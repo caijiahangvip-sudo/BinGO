@@ -22,11 +22,10 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; display: grid; place-items: center; color: var(--loader-text); background: var(--loader-bg); transition: background-color .18s ease, color .18s ease; }
-main { width: min(520px, calc(100vw - 48px)); padding: 42px; text-align: center; border: 1px solid var(--loader-border); border-radius: 24px; background: var(--loader-surface); box-shadow: 0 16px 40px rgb(0 0 0 / 8%); }
-.logo { width: 64px; height: 64px; display: block; margin: 0 auto 18px; border-radius: 16px; }
-h1 { margin: 0 0 10px; font-size: 42px; letter-spacing: .04em; }
+main { width: min(360px, calc(100vw - 48px)); padding: 46px 42px 40px; text-align: center; border: 1px solid var(--loader-border); border-radius: 24px; background: var(--loader-surface); box-shadow: 0 16px 40px rgb(0 0 0 / 8%); }
+.gear { width: 58px; height: 58px; margin: 0 auto 18px; color: var(--loader-accent); font-size: 54px; line-height: 58px; font-family: "Segoe UI Symbol", sans-serif; animation: spin 1.2s linear infinite; }
+.gear::before { content: "⚙"; }
 p { margin: 0; color: var(--loader-muted); line-height: 1.7; }
-.spinner { width: 42px; height: 42px; margin: 28px auto; border: 4px solid var(--loader-border); border-top-color: var(--loader-accent); border-radius: 50%; animation: spin 1s linear infinite; }
 #error { display: none; margin-top: 22px; color: #ff3b30; white-space: pre-wrap; }
 button { display: none; margin: 20px auto 0; padding: 10px 18px; color: white; border: 0; border-radius: 10px; background: var(--loader-accent); cursor: pointer; }
 @keyframes spin { to { transform: rotate(360deg); } }

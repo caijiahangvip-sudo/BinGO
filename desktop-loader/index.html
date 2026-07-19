@@ -18,11 +18,9 @@
     <link rel="stylesheet" href="loader.css" />
   </head>
   <body>
-    <main>
-      <img class="logo" src="bingo-logo.png" alt="BinGO" />
-      <h1>BinGO</h1>
-      <p id="status">正在启动本地教学服务，请稍候…</p>
-      <div class="spinner" id="spinner"></div>
+    <main aria-live="polite">
+      <div class="gear" id="gear" aria-label="正在启动"></div>
+      <p id="progress">正在启动 0%</p>
       <p id="error"></p>
       <button id="retry" type="button">重试</button>
     </main>
