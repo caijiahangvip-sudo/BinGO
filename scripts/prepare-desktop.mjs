@@ -124,22 +124,26 @@ async function pruneNextProductionRuntime() {
 }
 
 async function ensureNextRuntime() {
-  const bundledNext = join(serverDist, 'node_modules', 'next');
-  if (await exists(join(bundledNext, 'package.json'))) return;
-
-  const sourceNext = join(root, 'node_modules', 'next');
-  if (!(await exists(join(sourceNext, 'package.json')))) {
-    throw new Error('Next runtime is missing from node_modules. Run `pnpm install` before preparing desktop assets.');
-  }
-
   await mkdir(join(serverDist, 'node_modules'), { recursive: true });
-  await cp(sourceNext, bundledNext, { recursive: true, dereference: true });
+  const runtimePackages = ['next', '@swc/helpers', 'styled-jsx', 'sharp'];
+  for (const packageName of runtimePackages) {
+    const bundledPackage = join(serverDist, 'node_modules', packageName);
+    if (await exists(join(bundledPackage, 'package.json'))) continue;
+    const sourcePackage = join(root, 'node_modules', packageName);
+    if (!(await exists(join(sourcePackage, 'package.json')))) {
+      throw new Error(`Required desktop runtime package is missing: ${packageName}`);
+    }
+    await cp(sourcePackage, bundledPackage, { recursive: true, dereference: true });
+  }
 }
 
 async function validateStandaloneRuntime() {
   const required = [
     join(serverDist, 'node_modules', 'next', 'package.json'),
     join(serverDist, 'node_modules', 'next', 'dist', 'server', 'lib', 'start-server.js'),
+    join(serverDist, 'node_modules', '@swc', 'helpers', 'package.json'),
+    join(serverDist, 'node_modules', 'styled-jsx', 'package.json'),
+    join(serverDist, 'node_modules', 'sharp', 'package.json'),
   ];
   for (const path of required) {
     if (!(await exists(path))) {
