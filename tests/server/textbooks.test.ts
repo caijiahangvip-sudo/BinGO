@@ -8,8 +8,8 @@ type FetchResponse =
   | { ok: true; body: unknown }
   | { ok: false; status: number; statusText: string };
 
-let fetchResponses: Map<string, FetchResponse> = new Map();
-let fetchCalls: string[] = [];
+const fetchResponses: Map<string, FetchResponse> = new Map();
+const fetchCalls: string[] = [];
 
 function jsonResponse(body: unknown): Response {
   return {
@@ -228,7 +228,9 @@ describe('getTextbookCatalog', () => {
   });
 
   it('classifies transport failures as NETWORK_ERROR', async () => {
-    const { proxyFetch } = (await import('@/lib/server/proxy-fetch')) as any;
+    const { proxyFetch } = (await import('@/lib/server/proxy-fetch')) as {
+      proxyFetch: { mockRejectedValueOnce: (err: Error) => void };
+    };
     proxyFetch.mockRejectedValueOnce(new Error('fetch failed'));
     const { getTextbookCatalog } = await import('@/lib/server/textbooks');
 
@@ -335,7 +337,11 @@ describe('downloadTextbookPdf', () => {
   });
 
   it('classifies 401 and 403 resource responses as AUTH_REQUIRED', async () => {
-    const { proxyFetch } = (await import('@/lib/server/proxy-fetch')) as any;
+    const { proxyFetch } = (await import('@/lib/server/proxy-fetch')) as {
+      proxyFetch: {
+        mockImplementation: (fn: (url: string) => Promise<Response>) => void;
+      };
+    };
     proxyFetch.mockImplementation(async (url: string) => {
       fetchCalls.push(url);
       if (url.includes('details/book-1.json')) return errorResponse(403, 'Forbidden');
