@@ -1,0 +1,11 @@
+{
+  "version": "0.4.3",
+  "notes": "修复用户画像导出权限，并修复自动更新清单和签名配置。",
+  "pub_date": "2026-07-19T08:34:03.215Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTanVIUGtuYnhZTDE0WmtDMXJSM2tnSk1KK3JXYzdxV2FWM21wV21Nbk9lcnk0QUhEQ1V4UHRzMk85bDZmK1NaUlJiUi9XckhLR2o4cGVpSXNTblo2TWZQUnMyRjFOV2c0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NDQ5OTI5CWZpbGU6QmluR09fMC40LjNfeDY0LXNldHVwLm5zaXMuemlwCmFsZTFHTHkzaUwzT2dZbm9BZ0tmTUZzZTMxQjVnL0VTSHpZMzM1b2g5eWd4bjMrWEdaSjNTbVc1bk01WWcxcXJuZzNTNWxRY2RLTVNkZ3BUdXJGUEFnPT0K",
+      "url": "https://github.com/caijiahangvip-sudo/BinGO/releases/download/v0.4.3/BinGO_0.4.3_x64-setup.nsis.zip"
+    }
+  }
+}

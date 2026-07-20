@@ -48,9 +48,6 @@ export function TextbookLibraryDialog({
         networkFailed: '无法连接教材平台，请检查网络后重试。',
         authRequired: '教材平台会话无效，请先在 BinGO 内完成登录。',
         openPlatform: '打开平台登录',
-        openDownloader: '打开教材下载器',
-        downloaderOpened: '教材下载器已启动',
-        downloaderFailed: '教材下载器启动失败',
         tooLarge: '教材 PDF 超过 50 MB，无法作为当前附件导入。',
       }
     : {
@@ -69,9 +66,6 @@ export function TextbookLibraryDialog({
         networkFailed: 'Unable to reach the textbook platform. Check your network and retry.',
         authRequired: 'The textbook session is missing or expired. Sign in inside BinGO first.',
         openPlatform: 'Open platform login',
-        openDownloader: 'Open textbook downloader',
-        downloaderOpened: 'Textbook downloader started',
-        downloaderFailed: 'Failed to start textbook downloader',
         tooLarge:
           'The textbook PDF exceeds 50 MB and cannot be imported as the current attachment.',
       };
@@ -90,17 +84,6 @@ export function TextbookLibraryDialog({
     if (/NETWORK_ERROR|fetch failed|network/i.test(message)) return copy.networkFailed;
     if (/AUTH_REQUIRED|401|403|session|token/i.test(message)) return copy.authRequired;
     return message || fallback;
-  };
-
-  const launchDownloader = async () => {
-    try {
-      const response = await fetch('/api/textbook-downloader/launch', { method: 'POST' });
-      const data = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
-      if (!response.ok) throw new Error(data.details || data.error || copy.downloaderFailed);
-      toast.success(copy.downloaderOpened);
-    } catch (err) {
-      toast.error(getFriendlyError(err, copy.downloaderFailed));
-    }
   };
 
   useEffect(() => {
@@ -236,9 +219,6 @@ export function TextbookLibraryDialog({
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button type="button" variant="outline" size="sm" onClick={() => window.open('https://basic.smartedu.cn/', '_blank', 'noopener,noreferrer')}>
                   {copy.openPlatform}
-                </Button>
-                <Button type="button" variant="ghost" size="sm" onClick={launchDownloader}>
-                  {copy.openDownloader}
                 </Button>
               </div>
             </div>
