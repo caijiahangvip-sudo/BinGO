@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const releaseLocalModelServicesSafelyMock = vi.hoisted(() => vi.fn());
+const releaseLocalModelServicesMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/server/local-model-services', () => ({
-  releaseLocalModelServicesSafely: releaseLocalModelServicesSafelyMock,
+  releaseLocalModelServices: releaseLocalModelServicesMock,
 }));
 
 vi.mock('@/lib/logger', () => ({
@@ -17,7 +17,7 @@ vi.mock('@/lib/logger', () => ({
 
 describe('sensevoice stop route', () => {
   beforeEach(() => {
-    releaseLocalModelServicesSafelyMock.mockReset();
+    releaseLocalModelServicesMock.mockReset();
   });
 
   afterEach(() => {
@@ -25,7 +25,7 @@ describe('sensevoice stop route', () => {
   });
 
   it('returns success when SenseVoice is stopped successfully', async () => {
-    releaseLocalModelServicesSafelyMock.mockResolvedValueOnce({
+    releaseLocalModelServicesMock.mockResolvedValueOnce({
       services: ['sensevoice'],
       released: true,
     });
@@ -37,11 +37,11 @@ describe('sensevoice stop route', () => {
     expect(response.status).toBe(200);
     expect(body.success).toBe(true);
     expect(body.released).toBe(true);
-    expect(releaseLocalModelServicesSafelyMock).toHaveBeenCalledWith(['sensevoice']);
+    expect(releaseLocalModelServicesMock).toHaveBeenCalledWith(['sensevoice']);
   });
 
   it('returns success even when SenseVoice was not running', async () => {
-    releaseLocalModelServicesSafelyMock.mockResolvedValueOnce({
+    releaseLocalModelServicesMock.mockResolvedValueOnce({
       services: ['sensevoice'],
       released: false,
     });
@@ -56,7 +56,7 @@ describe('sensevoice stop route', () => {
   });
 
   it('returns error when release throws', async () => {
-    releaseLocalModelServicesSafelyMock.mockRejectedValueOnce(new Error('release failed'));
+    releaseLocalModelServicesMock.mockRejectedValueOnce(new Error('release failed'));
 
     const { POST } = await import('@/app/api/local-services/sensevoice/stop/route');
     const response = await POST();

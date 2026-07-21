@@ -1,5 +1,5 @@
 import { apiError, apiSuccess } from '@/lib/server/api-response';
-import { releaseLocalModelServicesSafely } from '@/lib/server/local-model-services';
+import { releaseLocalModelServices } from '@/lib/server/local-model-services';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SenseVoiceStop');
@@ -7,7 +7,7 @@ const log = createLogger('SenseVoiceStop');
 export async function POST() {
   try {
     log.info('Stopping SenseVoice...');
-    const result = await releaseLocalModelServicesSafely(['sensevoice']);
+    const result = await releaseLocalModelServices(['sensevoice']);
     return apiSuccess({
       released: result.released,
       message: result.released
