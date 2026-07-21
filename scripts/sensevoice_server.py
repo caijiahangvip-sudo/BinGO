@@ -49,6 +49,7 @@ model: AutoModel | None = None
 selected_device = "uninitialized"
 selected_accelerator = "uninitialized"
 model_id = "iic/SenseVoiceSmall"
+model_warmed = False
 REQUIRE_ROCM = os.environ.get("BINGO_REQUIRE_ROCM", "1").strip().lower() not in {
     "0",
     "false",
@@ -117,6 +118,7 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "model": model_id,
+        "warmed": model_warmed,
         "torch_device": selected_device,
         "accelerator": selected_accelerator,
         "requested_accelerator": args.device_runtime,
@@ -202,6 +204,55 @@ def main() -> None:
         device=selected_device,
         disable_update=True,
     )
+
+    # 模型预热：跑一次短静音推理，让 CUDA kernel 完成编译和缓存加载
+    global model_warmed
+    warmup_dir = tempfile.mkdtemp(prefix="bingo-sensevoice-warmup-")
+    try:
+        import struct
+        import wave as wave_module
+
+        warmup_wav = Path(warmup_dir) / "silence.wav"
+        sample_rate = 16000
+        duration_ms = 500
+        num_samples = sample_rate * duration_ms // 1000
+        with wave_module.open(str(warmup_wav), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            silence_frames = struct.pack("<" + "h" * num_samples, *([0] * num_samples))
+            wav_file.writeframes(silence_frames)
+
+        print(
+            json.dumps({"event": "sensevoice_warmup_start"}, ensure_ascii=False),
+            flush=True,
+        )
+        model.generate(
+            input=str(warmup_wav),
+            cache={},
+            language="auto",
+            use_itn=True,
+            batch_size_s=60,
+            merge_vad=True,
+            merge_length_s=15,
+        )
+        model_warmed = True
+        print(
+            json.dumps({"event": "sensevoice_warmup_done"}, ensure_ascii=False),
+            flush=True,
+        )
+    except Exception as warmup_error:
+        print(
+            json.dumps(
+                {"event": "sensevoice_warmup_failed", "error": str(warmup_error)},
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+    finally:
+        import shutil
+
+        shutil.rmtree(warmup_dir, ignore_errors=True)
 
     import uvicorn
 
