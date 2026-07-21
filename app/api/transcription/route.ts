@@ -7,19 +7,14 @@ import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 import {
   ensureLocalModelServiceRunning,
-  releaseLocalModelServicesSafely,
 } from '@/lib/server/local-model-services';
 const log = createLogger('Transcription');
 
 export const maxDuration = 900;
 
 const SENSEVOICE_DEFAULT_PORT = 50001;
-const DEFAULT_SENSEVOICE_IDLE_RELEASE_MS = 5 * 60 * 1000;
 const MIN_LOCAL_SERVICE_TEST_TIMEOUT_MS = 5_000;
 const MAX_LOCAL_SERVICE_TEST_TIMEOUT_MS = 10 * 60 * 1000;
-
-let activeSenseVoiceRequests = 0;
-let senseVoiceReleaseTimer: ReturnType<typeof setTimeout> | undefined;
 
 function isSenseVoiceUnavailableError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('SenseVoice local service is not reachable');
@@ -41,13 +36,6 @@ function resolveSenseVoicePort(baseUrl?: string): number {
   }
 }
 
-function getSenseVoiceIdleReleaseMs(): number {
-  const envValue = Number.parseInt(process.env.BINGO_SENSEVOICE_IDLE_RELEASE_MS ?? '', 10);
-  return Number.isFinite(envValue) && envValue >= 0
-    ? envValue
-    : DEFAULT_SENSEVOICE_IDLE_RELEASE_MS;
-}
-
 function parseLocalServiceStartupTimeoutMs(value: FormDataEntryValue | null): number | undefined {
   if (typeof value !== 'string' || !value.trim()) return undefined;
   const parsed = Number.parseInt(value, 10);
@@ -56,36 +44,6 @@ function parseLocalServiceStartupTimeoutMs(value: FormDataEntryValue | null): nu
     Math.max(parsed, MIN_LOCAL_SERVICE_TEST_TIMEOUT_MS),
     MAX_LOCAL_SERVICE_TEST_TIMEOUT_MS,
   );
-}
-
-function beginSenseVoiceRequest(): void {
-  activeSenseVoiceRequests += 1;
-  if (senseVoiceReleaseTimer) {
-    clearTimeout(senseVoiceReleaseTimer);
-    senseVoiceReleaseTimer = undefined;
-  }
-}
-
-function scheduleSenseVoiceIdleRelease(keepWarm: boolean): void {
-  activeSenseVoiceRequests = Math.max(0, activeSenseVoiceRequests - 1);
-  if (keepWarm || activeSenseVoiceRequests > 0) return;
-
-  if (senseVoiceReleaseTimer) {
-    clearTimeout(senseVoiceReleaseTimer);
-  }
-
-  const idleMs = getSenseVoiceIdleReleaseMs();
-  senseVoiceReleaseTimer = setTimeout(() => {
-    senseVoiceReleaseTimer = undefined;
-    if (activeSenseVoiceRequests > 0) return;
-
-    log.info(`Releasing SenseVoice after ${idleMs}ms idle.`);
-    releaseLocalModelServicesSafely(['sensevoice']).catch((error) => {
-      log.warn('Failed to release idle SenseVoice service:', error);
-    });
-  }, idleMs);
-
-  senseVoiceReleaseTimer.unref?.();
 }
 
 async function transcribeAudioWithLocalSenseVoiceRetry(
@@ -137,7 +95,6 @@ export async function POST(req: NextRequest) {
     const language = formData.get('language') as string | null;
     const apiKey = formData.get('apiKey') as string | null;
     const baseUrl = formData.get('baseUrl') as string | null;
-    const keepServiceWarm = formData.get('keepServiceWarm') === 'true';
     const localServiceStartupTimeoutMs = parseLocalServiceStartupTimeoutMs(
       formData.get('localServiceStartupTimeoutMs'),
     );
@@ -180,22 +137,11 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     // Transcribe using the provider system
-    const shouldScheduleSenseVoiceRelease = config.providerId === 'sensevoice-asr';
-    if (shouldScheduleSenseVoiceRelease) {
-      beginSenseVoiceRequest();
-    }
-    let result: Awaited<ReturnType<typeof transcribeAudio>>;
-    try {
-      result = await transcribeAudioWithLocalSenseVoiceRetry(
-        config,
-        buffer,
-        localServiceStartupTimeoutMs,
-      );
-    } finally {
-      if (shouldScheduleSenseVoiceRelease) {
-        scheduleSenseVoiceIdleRelease(keepServiceWarm);
-      }
-    }
+    const result = await transcribeAudioWithLocalSenseVoiceRetry(
+      config,
+      buffer,
+      localServiceStartupTimeoutMs,
+    );
 
     return apiSuccess({ text: result.text });
   } catch (error) {

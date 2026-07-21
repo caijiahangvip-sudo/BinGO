@@ -85,8 +85,9 @@ describe('transcription route', () => {
     expect(transcribeAudioMock).toHaveBeenCalledTimes(2);
     expect(ensureLocalModelServiceRunningMock).toHaveBeenCalledWith('sensevoice', { port: 50001 });
 
+    // SenseVoice 现在常驻，转录完成后不应释放
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    expect(releaseLocalModelServicesSafelyMock).toHaveBeenCalledWith(['sensevoice']);
+    expect(releaseLocalModelServicesSafelyMock).not.toHaveBeenCalled();
   });
 
   it('uses the configured SenseVoice base URL port when starting the service', async () => {
@@ -154,19 +155,11 @@ describe('transcription route', () => {
     );
   });
 
-  it('keeps SenseVoice warm when requested by the caller', async () => {
+  it('does not release SenseVoice after transcription completes', async () => {
     transcribeAudioMock.mockResolvedValueOnce({ text: 'warm chunk' });
 
-    const request = buildRequest();
-    const formData = await request.formData();
-    formData.append('keepServiceWarm', 'true');
-    const warmRequest = new Request('http://localhost/api/transcription', {
-      method: 'POST',
-      body: formData,
-    });
-
     const { POST } = await import('@/app/api/transcription/route');
-    const response = await POST(warmRequest as never);
+    const response = await POST(buildRequest() as never);
 
     expect(response.status).toBe(200);
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
