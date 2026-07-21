@@ -1,4 +1,4 @@
-param(
+﻿param(
   [int]$AppPort = 4000,
   [int]$CosyVoicePort = 50000,
   [int]$SenseVoicePort = 50001,
@@ -371,6 +371,28 @@ else {
       -WindowStyle Hidden `
       -RedirectStandardOutput (Join-Path $root "bingo-app.log") `
       -RedirectStandardError (Join-Path $root "bingo-app.err.log") | Out-Null
+  }
+}
+
+# 启动 SenseVoice（常驻模式，不再按需启动）
+if (Test-PortListening $SenseVoicePort) {
+  Write-Host "SenseVoice is already listening on port $SenseVoicePort."
+}
+else {
+  Write-Host "Starting SenseVoice on port $SenseVoicePort..."
+  $sensevoiceScript = Join-Path $root "scripts\sensevoice-local-server.ps1"
+  if (Test-Path $sensevoiceScript) {
+    Start-Process `
+      -FilePath "powershell.exe" `
+      -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $sensevoiceScript, "-SenseVoicePort", $SenseVoicePort `
+      -WorkingDirectory $root `
+      -WindowStyle Hidden `
+      -RedirectStandardOutput (Join-Path $root "bingo-sensevoice-start.log") `
+      -RedirectStandardError (Join-Path $root "bingo-sensevoice-start.err.log") | Out-Null
+    Write-Host "SenseVoice start command issued. Check bingo-sensevoice-start.log for details."
+  }
+  else {
+    Write-Host "SenseVoice launch script not found at $sensevoiceScript. SenseVoice will start on demand."
   }
 }
 
