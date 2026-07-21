@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "BinGO",
-  "version": "0.4.3",
+  "version": "0.4.5",
   "identifier": "app.bingo.desktop",
   "build": {
     "frontendDist": "../desktop-loader",
