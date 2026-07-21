@@ -23,6 +23,7 @@ const SECRET_SCOPES: &[&str] = &[
 struct ServerProcess {
   child: Child,
   port: u16,
+  server_dir: PathBuf,
   #[cfg(target_os = "windows")]
   job: windows_sys::Win32::Foundation::HANDLE,
 }
@@ -170,6 +171,21 @@ fn runtime_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String>
 fn stop_server(state: &ServerState) {
   if let Ok(mut guard) = state.0.lock() {
     if let Some(server) = guard.as_mut() {
+      // 先释放 SenseVoice（WSL 进程不会被 Job Object 自动杀死）
+      let release_script = server.server_dir.join("scripts").join("release-local-model-services.ps1");
+      if release_script.exists() {
+        let script_path = release_script.to_string_lossy().into_owned();
+        let _ = Command::new("powershell.exe")
+          .arg("-NoProfile")
+          .arg("-ExecutionPolicy")
+          .arg("Bypass")
+          .arg("-File")
+          .arg(&script_path)
+          .arg("-Service")
+          .arg("sensevoice")
+          .output();
+      }
+
       let _ = server.child.kill();
       let _ = server.child.wait();
       #[cfg(target_os = "windows")]
@@ -626,6 +642,7 @@ async fn start_bingo_server(app: AppHandle) -> Result<(), String> {
   *state.0.lock().map_err(|_| "无法保存服务状态")? = Some(ServerProcess {
     child,
     port,
+    server_dir: server_dir.clone(),
     #[cfg(target_os = "windows")]
     job,
   });
