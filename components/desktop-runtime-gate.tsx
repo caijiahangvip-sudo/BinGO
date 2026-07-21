@@ -1,6 +1,7 @@
 'use client';
 
 import { type ReactNode, useEffect, useState } from 'react';
+import { startSenseVoiceLifecycle } from '@/lib/desktop/sensevoice-lifecycle';
 
 function isTauriRuntime() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -43,6 +44,8 @@ export function DesktopRuntimeGate({ children }: { children: ReactNode }) {
         window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
         setError(null);
         setReady(true);
+        // 桌面会话就绪后异步拉起 SenseVoice（不阻塞主界面）
+        void startSenseVoiceLifecycle();
       } catch (reason) {
         if (!disposed) setError(`无法建立安全桌面会话：${String(reason)}`);
       }
