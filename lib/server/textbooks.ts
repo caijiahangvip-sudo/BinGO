@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import sharp from 'sharp';
 import { proxyFetch } from '@/lib/server/proxy-fetch';
 import type { TextbookCatalogNode, TextbookListItem } from '@/lib/textbooks/types';
 
@@ -356,6 +355,11 @@ function orderedPreviewUrls(detail: YktTextbookDetail): string[] {
 }
 
 async function buildPdfFromPreviewImages(urls: string[]): Promise<Buffer> {
+  // Lazy-load sharp so catalog/search routes don't depend on it.
+  // sharp is a native addon that can fail to load in some environments,
+  // and it's only needed for PDF generation from preview images.
+  const sharp = (await import('sharp')).default;
+
   const images = await Promise.all(
     urls.map(async (url) => {
       const response = await proxyFetch(url, { cache: 'no-store' });

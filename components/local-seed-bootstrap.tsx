@@ -8,6 +8,7 @@ import { createLogger } from '@/lib/logger';
 import { getCurrentLocalDataState, importLocalBackup } from '@/lib/utils/local-backup';
 import { toast } from 'sonner';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { getRuntimePlatform } from '@/lib/runtime/platform';
 
 const log = createLogger('LocalSeedBootstrap');
 const SEED_DECISION_PREFIX = 'bingo.localSeed.';
@@ -60,6 +61,10 @@ export function LocalSeedBootstrap() {
   );
 
   useEffect(() => {
+    if (getRuntimePlatform() === 'ipados') {
+      setState('idle');
+      return;
+    }
     if (pathname === '/local-backup') {
       setState('idle');
       return;

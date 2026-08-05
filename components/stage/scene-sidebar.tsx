@@ -199,7 +199,7 @@ export function SceneSidebar({
                 {/* Thumbnail */}
                 <div className="relative aspect-video w-full rounded overflow-hidden bg-muted ring-1 ring-border/60">
                   <div className="absolute inset-0 flex items-center justify-center">
-                    {isSlide && slideContent ? (
+                    {isSlide && slideContent?.canvas ? (
                       <ThumbnailSlide
                         slide={slideContent.canvas}
                         viewportSize={viewportSize}

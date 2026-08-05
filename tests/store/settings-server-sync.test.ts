@@ -603,8 +603,15 @@ describe('fetchServerProviders — provider availability sync', () => {
 
   // ---- Server model list filtering ----
 
-  it('filters models to only those the server allows', async () => {
+  it('preserves saved models while recording the server allowlist', async () => {
     const store = await getStore();
+    store.getState().setProviderConfig('openai', {
+      baseUrl: 'https://user-proxy.example/v1',
+      models: [
+        { id: 'user-model', name: 'User Model' },
+        { id: 'gpt-4o', name: 'GPT-4o' },
+      ],
+    });
     mockServerResponse({
       providers: {
         openai: { models: ['gpt-4o'] },
@@ -615,9 +622,29 @@ describe('fetchServerProviders — provider availability sync', () => {
 
     const config = store.getState().providersConfig.openai;
     const modelIds = config.models.map((m) => m.id);
-    expect(modelIds).toEqual(['gpt-4o']);
-    expect(modelIds.includes('gpt-4o-mini')).toBe(false);
-    expect(modelIds.includes('gpt-4-turbo')).toBe(false);
+    expect(modelIds).toEqual(['user-model', 'gpt-4o']);
+    expect(config.baseUrl).toBe('https://user-proxy.example/v1');
+    expect(config.serverModels).toEqual(['gpt-4o']);
+  });
+
+  it('preserves lightweight saved models and Base URL during server sync', async () => {
+    const store = await getStore();
+    store.getState().setLightweightProviderConfig('openai', {
+      baseUrl: 'https://lightweight-proxy.example/v1',
+      models: [{ id: 'lightweight-custom', name: 'Lightweight Custom' }],
+    });
+    mockServerResponse({
+      providers: {
+        openai: { models: ['gpt-4o-mini'] },
+      },
+    });
+
+    await store.getState().fetchServerProviders();
+
+    const config = store.getState().lightweightProvidersConfig.openai;
+    expect(config.models.map((m) => m.id)).toEqual(['lightweight-custom']);
+    expect(config.baseUrl).toBe('https://lightweight-proxy.example/v1');
+    expect(config.serverModels).toEqual(['gpt-4o-mini']);
   });
 
   it('keeps all models when server provides no model restriction', async () => {
@@ -636,31 +663,60 @@ describe('fetchServerProviders — provider availability sync', () => {
     expect(modelIds).toContain('gpt-4-turbo');
   });
 
-  it('removes a model when server drops it from the allowed list', async () => {
+  it('preserves saved models when the server narrows its allowlist', async () => {
     const store = await getStore();
+    const { getEffectiveModels } = await import('@/lib/store/settings-validation');
 
-    // Round 1: server allows two models
+    // Seed a user-owned model list that includes models outside any server list.
+    store.getState().setProviderConfig('openai', {
+      models: [
+        { id: 'gpt-4o', name: 'GPT-4o' },
+        { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
+        { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' },
+      ],
+    });
+
+    // Round 1: server allows two of the saved models.
     mockServerResponse({
       providers: {
         openai: { models: ['gpt-4o', 'gpt-4o-mini'] },
       },
     });
     await store.getState().fetchServerProviders();
-    expect(store.getState().providersConfig.openai.models.map((m) => m.id)).toEqual([
+
+    const configAfterRound1 = store.getState().providersConfig.openai;
+    // Saved list is preserved.
+    expect(configAfterRound1.models.map((m) => m.id)).toEqual([
+      'gpt-4o',
+      'gpt-4o-mini',
+      'gpt-4-turbo',
+    ]);
+    // Server metadata records the restriction.
+    expect(configAfterRound1.serverModels).toEqual(['gpt-4o', 'gpt-4o-mini']);
+    // Effective runtime list is filtered for the server-only provider.
+    expect(getEffectiveModels(configAfterRound1).map((m) => m.id)).toEqual([
       'gpt-4o',
       'gpt-4o-mini',
     ]);
 
-    // Round 2: server removes gpt-4o-mini
+    // Round 2: server removes gpt-4o-mini from the allowlist.
     mockServerResponse({
       providers: {
         openai: { models: ['gpt-4o'] },
       },
     });
     await store.getState().fetchServerProviders();
-    const modelIds = store.getState().providersConfig.openai.models.map((m) => m.id);
-    expect(modelIds).toEqual(['gpt-4o']);
-    expect(modelIds.includes('gpt-4o-mini')).toBe(false);
+
+    const configAfterRound2 = store.getState().providersConfig.openai;
+    // Saved list is still preserved.
+    expect(configAfterRound2.models.map((m) => m.id)).toEqual([
+      'gpt-4o',
+      'gpt-4o-mini',
+      'gpt-4-turbo',
+    ]);
+    expect(configAfterRound2.serverModels).toEqual(['gpt-4o']);
+    // Effective runtime list is now narrowed without erasing user config.
+    expect(getEffectiveModels(configAfterRound2).map((m) => m.id)).toEqual(['gpt-4o']);
   });
 
   // ---- Provider availability flags ----

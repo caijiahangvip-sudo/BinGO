@@ -652,7 +652,32 @@ async fn start_bingo_server(app: AppHandle) -> Result<(), String> {
   Ok(())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(mobile)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IPadPlatformInfo {
+  platform: &'static str,
+  device_family: &'static str,
+  architecture: &'static str,
+  model_execution: &'static str,
+  local_inference: bool,
+  browser_tts_allowed: bool,
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+fn bingo_platform_info() -> IPadPlatformInfo {
+  IPadPlatformInfo {
+    platform: if cfg!(target_os = "ios") { "ipados" } else { "desktop" },
+    device_family: if cfg!(target_os = "ios") { "ipad" } else { "desktop" },
+    architecture: std::env::consts::ARCH,
+    model_execution: if cfg!(target_os = "ios") { "cloud-api" } else { "local" },
+    local_inference: !cfg!(target_os = "ios"),
+    browser_tts_allowed: true,
+  }
+}
+
+#[cfg(not(mobile))]
 pub fn run() {
   tauri::Builder::default()
     .manage(ServerState(Mutex::new(None)))
@@ -693,4 +718,25 @@ pub fn run() {
     })
     .run(tauri::generate_context!())
     .expect("error while running BinGO");
+}
+
+#[cfg(mobile)]
+#[tauri::mobile_entry_point]
+pub fn run() {
+  tauri::Builder::default()
+    .plugin(tauri_plugin_http::init())
+    .plugin(tauri_plugin_fs::init())
+    .invoke_handler(tauri::generate_handler![bingo_platform_info])
+    .setup(|app| {
+      if cfg!(debug_assertions) {
+        app.handle().plugin(
+          tauri_plugin_log::Builder::default()
+            .level(log::LevelFilter::Info)
+            .build(),
+        )?;
+      }
+      Ok(())
+    })
+    .run(tauri::generate_context!())
+    .expect("error while running BinGO for iPadOS");
 }

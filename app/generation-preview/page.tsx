@@ -38,6 +38,10 @@ import { type GenerationSessionState, ALL_STEPS, getActiveSteps } from './types'
 import { StepVisualizer } from './components/visualizers';
 import { resolveColorThemeId } from '@/lib/theme/color-themes';
 import { getCurrentColorTheme } from '@/lib/theme/theme-runtime';
+import { normalizeSlideContent } from '@/lib/utils/slide-content-normalization';
+import { resolveRuntimeTtsProvider } from '@/lib/runtime/audio-routing';
+import { getRuntimePlatform } from '@/lib/runtime/platform';
+import { parsePdfLocally } from '@/lib/runtime/local-documents';
 
 const log = createLogger('GenerationPreview');
 const GENERATION_PREVIEW_PDF_MAX_PAGES = 8;
@@ -253,42 +257,48 @@ function GenerationPreviewContent() {
           type: 'application/pdf',
         });
 
-        const parseFormData = new FormData();
-        parseFormData.append('pdf', pdfFile);
-        parseFormData.append('mode', 'fast');
-        parseFormData.append('maxPages', String(GENERATION_PREVIEW_PDF_MAX_PAGES));
-        parseFormData.append('needsCover', 'false');
-        parseFormData.append('needsImages', 'false');
-        parseFormData.append('needsMiddleJson', 'false');
-
-        if (currentSession.pdfProviderId) {
-          parseFormData.append('providerId', currentSession.pdfProviderId);
-        }
-        if (currentSession.pdfProviderConfig?.apiKey?.trim()) {
-          parseFormData.append('apiKey', currentSession.pdfProviderConfig.apiKey);
-        }
-        if (currentSession.pdfProviderConfig?.baseUrl?.trim()) {
-          parseFormData.append('baseUrl', currentSession.pdfProviderConfig.baseUrl);
-        }
-
         let parsedPdfData: ParsePdfData;
         try {
-          const parseResponse = await fetch('/api/parse-pdf', {
-            method: 'POST',
-            body: parseFormData,
-            signal,
-          });
-          const parseResult = await readApiJson<ParsePdfApiResponse>(
-            parseResponse,
-            t('generation.pdfParseFailed'),
-          );
-          if (!parseResponse.ok || !parseResult.success || !isParsePdfData(parseResult.data)) {
-            throw new Error(parseResult.error || t('generation.pdfParseFailed'));
+          if (getRuntimePlatform() === 'ipados') {
+            parsedPdfData = await parsePdfLocally(pdfFile, {
+              maxPages: GENERATION_PREVIEW_PDF_MAX_PAGES,
+              includePageImages: true,
+            });
+          } else {
+            const parseFormData = new FormData();
+            parseFormData.append('pdf', pdfFile);
+            parseFormData.append('mode', 'fast');
+            parseFormData.append('maxPages', String(GENERATION_PREVIEW_PDF_MAX_PAGES));
+            parseFormData.append('needsCover', 'false');
+            parseFormData.append('needsImages', 'false');
+            parseFormData.append('needsMiddleJson', 'false');
+            if (currentSession.pdfProviderId)
+              parseFormData.append('providerId', currentSession.pdfProviderId);
+            if (currentSession.pdfProviderConfig?.apiKey?.trim())
+              parseFormData.append('apiKey', currentSession.pdfProviderConfig.apiKey);
+            if (currentSession.pdfProviderConfig?.baseUrl?.trim())
+              parseFormData.append('baseUrl', currentSession.pdfProviderConfig.baseUrl);
+
+            const parseResponse = await fetch('/api/parse-pdf', {
+              method: 'POST',
+              body: parseFormData,
+              signal,
+            });
+            const parseResult = await readApiJson<ParsePdfApiResponse>(
+              parseResponse,
+              t('generation.pdfParseFailed'),
+            );
+            if (!parseResponse.ok || !parseResult.success || !isParsePdfData(parseResult.data)) {
+              throw new Error(parseResult.error || t('generation.pdfParseFailed'));
+            }
+            parsedPdfData = parseResult.data;
           }
-          parsedPdfData = parseResult.data;
         } catch (parseError) {
           if (signal.aborted) throw parseError;
-          log.warn('PDF parsing failed; continuing classroom generation with the lesson request.', parseError);
+          log.warn(
+            'PDF parsing failed; continuing classroom generation with the lesson request.',
+            parseError,
+          );
           parsedPdfData = {
             text: currentSession.requirements.requirement || currentSession.pdfFileName || '',
             images: [],
@@ -820,13 +830,17 @@ function GenerationPreviewContent() {
       // Show the first slide as soon as its visual content is ready. Actions and
       // narration are enriched in the background and must not block first paint.
       const pendingSceneId = nanoid(12);
+      const pendingSlideContent = normalizeSlideContent(
+        contentData.content,
+        stage.visualTheme,
+      ).content;
       const pendingScene = {
         id: pendingSceneId,
         stageId: stage.id,
         type: 'slide' as const,
         title: firstOutline.title,
         order: firstOutline.order,
-        content: contentData.content,
+        content: pendingSlideContent,
         actions: [],
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -880,8 +894,10 @@ function GenerationPreviewContent() {
 
       // Generate TTS for first scene (part of actions step — blocking)
       const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
-      const ttsCompatibleProviderId =
-        ttsProviderConfig?.compatibleProviderId || settings.ttsProviderId;
+      const ttsCompatibleProviderId = resolveRuntimeTtsProvider(
+        settings.ttsProviderId,
+        ttsProviderConfig?.compatibleProviderId || settings.ttsProviderId,
+      );
       if (settings.ttsEnabled && ttsCompatibleProviderId !== 'browser-native-tts') {
         const failSceneOnTTSFailure = ttsCompatibleProviderId === 'cosyvoice-tts';
         const speechActions = (data.scene.actions || []).filter(

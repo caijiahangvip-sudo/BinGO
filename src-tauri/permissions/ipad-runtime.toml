@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-ipad-runtime"
+description = "Allows the native BinGO iPad shell to inspect its local runtime."
+commands.allow = ["bingo_platform_info"]

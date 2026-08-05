@@ -1,6 +1,11 @@
 import { useState, useRef, useCallback } from 'react';
 import { ASR_PROVIDERS } from '@/lib/audio/constants';
 import { createLogger } from '@/lib/logger';
+import {
+  getSpeechRecognitionErrorMessage,
+  resolveRuntimeAsrProvider,
+} from '@/lib/runtime/audio-routing';
+import { getRuntimePlatform } from '@/lib/runtime/platform';
 
 const log = createLogger('AudioRecorder');
 
@@ -55,9 +60,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
           formData.append('compatibleProviderId', compatibleProviderId);
           formData.append(
             'modelId',
-            providerConfig?.modelId ||
-              ASR_PROVIDERS[compatibleProviderId]?.defaultModelId ||
-              '',
+            providerConfig?.modelId || ASR_PROVIDERS[compatibleProviderId]?.defaultModelId || '',
           );
           formData.append('language', asrLanguage);
 
@@ -104,13 +107,20 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
         const { useSettingsStore } = await import('@/lib/store/settings');
         const { asrProviderId, asrLanguage, asrProvidersConfig } = useSettingsStore.getState();
         const providerConfig = asrProvidersConfig?.[asrProviderId];
-        const compatibleProviderId = providerConfig?.compatibleProviderId || asrProviderId;
+        const compatibleProviderId = resolveRuntimeAsrProvider(
+          asrProviderId,
+          providerConfig?.compatibleProviderId || asrProviderId,
+        );
 
         // Use browser native ASR if configured
         if (compatibleProviderId === 'browser-native') {
           // Check if Speech Recognition is supported
           if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
-            onError?.('您的浏览器不支持语音识别功能');
+            onError?.(
+              getRuntimePlatform() === 'ipados'
+                ? '当前 iPad 系统 WebView 不支持语音识别，请确认系统版本和“语音识别”权限'
+                : '您的浏览器不支持语音识别功能',
+            );
             return;
           }
 
@@ -142,36 +152,8 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
 
           recognition.onerror = (event: { error: string }) => {
             log.error('Speech recognition error:', event.error);
-            let errorMessage = '语音识别失败';
-
-            switch (event.error) {
-              case 'aborted':
-                // Non-fatal: caused by our own cancel/stop logic or rapid toggle
-                busyRef.current = false;
-                setIsRecording(false);
-                setRecordingTime(0);
-                if (timerRef.current) {
-                  clearInterval(timerRef.current);
-                  timerRef.current = null;
-                }
-                return;
-              case 'no-speech':
-                errorMessage = '未检测到语音输入';
-                break;
-              case 'audio-capture':
-                errorMessage = '无法访问麦克风';
-                break;
-              case 'not-allowed':
-                errorMessage = '麦克风权限被拒绝';
-                break;
-              case 'network':
-                errorMessage = '网络错误';
-                break;
-              default:
-                errorMessage = `语音识别错误: ${event.error}`;
-            }
-
-            onError?.(errorMessage);
+            const errorMessage = getSpeechRecognitionErrorMessage(event.error);
+            if (errorMessage) onError?.(errorMessage);
             busyRef.current = false;
             setIsRecording(false);
             setRecordingTime(0);

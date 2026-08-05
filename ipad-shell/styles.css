@@ -1,0 +1,32 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", sans-serif;
+  background: #07111f;
+  color: #f8fafc;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 15% 10%, #0c4a6e 0, transparent 38%), radial-gradient(circle at 85% 90%, #312e81 0, transparent 42%), #07111f; }
+main { min-height: 100vh; max-width: 980px; margin: auto; padding: max(64px, env(safe-area-inset-top)) max(40px, env(safe-area-inset-right)) max(48px, env(safe-area-inset-bottom)) max(40px, env(safe-area-inset-left)); display: grid; align-content: center; gap: 36px; }
+.brand { display: flex; align-items: center; gap: 28px; }
+.app-icon { width: 112px; height: 112px; border-radius: 28px; display: grid; place-items: center; flex: 0 0 auto; font-size: 72px; font-weight: 900; background: linear-gradient(135deg, #38bdf8, #6366f1); box-shadow: 0 24px 80px rgba(56, 189, 248, 0.3); }
+.eyebrow { margin: 0; color: #7dd3fc; font-size: 18px; font-weight: 700; }
+h1 { margin: 8px 0; font-size: clamp(42px, 6vw, 72px); line-height: 1.05; }
+.description { margin: 0; color: #cbd5e1; font-size: 22px; line-height: 1.6; }
+.card { display: grid; gap: 16px; padding: 28px; border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 28px; background: rgba(15, 23, 42, 0.82); backdrop-filter: blur(28px); }
+label { color: #cbd5e1; font-size: 18px; font-weight: 700; }
+input, button { min-height: 58px; border-radius: 16px; font: inherit; font-size: 19px; }
+input { width: 100%; border: 1px solid #475569; background: #020617; color: white; padding: 0 18px; outline: none; }
+input:focus { border-color: #38bdf8; box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.18); }
+button { border: 0; padding: 0 22px; color: white; background: linear-gradient(135deg, #0284c7, #4f46e5); font-weight: 800; }
+button.secondary { background: rgba(148, 163, 184, 0.14); color: #cbd5e1; }
+#status { min-height: 24px; margin: 0; color: #94a3b8; line-height: 1.5; }
+#status.error { color: #fca5a5; }
+.capabilities { display: flex; flex-wrap: wrap; gap: 10px; }
+.capabilities span { border: 1px solid rgba(125, 211, 252, 0.3); border-radius: 999px; color: #bae6fd; padding: 10px 14px; }
+.hint { margin: 0; color: #94a3b8; font-size: 15px; line-height: 1.5; }
+
+@media (orientation: portrait) {
+  main { align-content: start; }
+  .brand { align-items: flex-start; flex-direction: column; }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "BinGO",
+  "identifier": "app.bingo.ipad",
+  "build": {
+    "frontendDist": "../ipad-shell",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "capabilities": ["ipad"],
+    "windows": [
+      {
+        "label": "main",
+        "title": "BinGO",
+        "width": 1366,
+        "height": 1024,
+        "minWidth": 768,
+        "minHeight": 768,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost http: https: ws: wss:; img-src 'self' asset: http://asset.localhost data: blob: http: https:; media-src 'self' asset: blob: http: https:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "resources": {},
+    "iOS": {
+      "minimumSystemVersion": "18.0",
+      "infoPlist": "Info.ios.plist"
+    },
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png"]
+  },
+  "plugins": {}
+}

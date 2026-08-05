@@ -30,31 +30,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "resources": {
-      "../desktop-dist/server": "server",
-      "binaries/node.exe": "binaries/node.exe"
-    },
-    "createUpdaterArtifacts": "v1Compatible",
-    "windows": {
-      "nsis": {
-        "installMode": "both",
-        "languages": ["SimpChinese"],
-        "displayLanguageSelector": false,
-        "installerHooks": "windows/installer-hooks.nsh",
-        "template": "nsis/installer.nsi"
-      }
-    },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"]
   },
-  "plugins": {
-    "updater": {
-      "active": true,
-      "endpoints": [
-        "https://github.com/caijiahangvip-sudo/BinGO/releases/download/v0.4.3/latest.json"
-      ],
-      "dialog": false,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJGNThCQzlERTQ3M0I4QTMKUldTanVIUGtuYnhZTHpuRDZLZ21XOTZkUkU5ZTgrYUFSRGphWHRjQkhHbUtCTi8xa1RVN3YrUVgK"
-    }
-  }
+  "plugins": {}
 }

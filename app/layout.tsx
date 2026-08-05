@@ -12,6 +12,7 @@ import { getThemeInitScript } from '@/lib/theme/theme-runtime';
 import { DesktopUpdater } from '@/components/desktop-updater';
 import { DesktopSecretBootstrap } from '@/components/desktop-secret-bootstrap';
 import { DesktopRuntimeGate } from '@/components/desktop-runtime-gate';
+import { IPadRuntimeBootstrap } from '@/components/ipad/ipad-runtime-bootstrap';
 
 export const metadata: Metadata = {
   title: 'BinGo',
@@ -33,6 +34,7 @@ export default function RootLayout({
       <body className="antialiased" suppressHydrationWarning>
         <ThemeProvider>
           <I18nProvider>
+            <IPadRuntimeBootstrap />
             <DesktopRuntimeGate>
               <LocalSeedBootstrap />
               <ServerProvidersInit />

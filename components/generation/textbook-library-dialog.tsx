@@ -19,6 +19,28 @@ import type {
 
 const MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024;
 
+/**
+ * Safely parse a JSON response from a textbook API endpoint.
+ *
+ * Next.js route handlers normally return JSON even on error, but framework-
+ * level failures (500 Internal Server Error, middleware rejections, dev
+ * compilation crashes) can return plain-text or HTML bodies. Calling
+ * response.json() on such bodies throws a confusing "Unexpected token" error.
+ * This helper surfaces a readable message instead.
+ */
+async function parseTextbookResponse(response: Response, fallbackMessage: string): Promise<unknown> {
+  const contentType = response.headers.get('content-type') || '';
+  const text = await response.text();
+  if (!contentType.includes('application/json')) {
+    throw new Error(text.trim() || fallbackMessage);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(text.trim() || fallbackMessage);
+  }
+}
+
 interface TextbookLibraryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -96,7 +118,7 @@ export function TextbookLibraryDialog({
     setError(null);
     fetch('/api/textbooks/catalog', { cache: 'no-store' })
       .then(async (response) => {
-        const data = (await response.json()) as TextbookCatalogResponse;
+        const data = (await parseTextbookResponse(response, copy.catalogFailed)) as TextbookCatalogResponse;
         if (!response.ok || !data.success || !data.catalog) {
           throw new Error(data.details || data.error || copy.catalogFailed);
         }
@@ -133,7 +155,7 @@ export function TextbookLibraryDialog({
         signal: controller.signal,
       })
         .then(async (response) => {
-          const data = (await response.json()) as TextbookSearchResponse;
+          const data = (await parseTextbookResponse(response, copy.catalogFailed)) as TextbookSearchResponse;
           if (!response.ok || !data.success || !data.results) {
             throw new Error(data.details || data.error || copy.catalogFailed);
           }
@@ -175,11 +197,11 @@ export function TextbookLibraryDialog({
       });
 
       if (!response.ok) {
-        const data = (await response.json().catch(() => ({}))) as {
+        const data = (await parseTextbookResponse(response, copy.downloadFailed).catch(() => null)) as {
           error?: string;
           details?: string;
-        };
-        throw new Error(data.details || data.error || copy.downloadFailed);
+        } | null;
+        throw new Error(data?.details || data?.error || copy.downloadFailed);
       }
 
       const blob = await response.blob();

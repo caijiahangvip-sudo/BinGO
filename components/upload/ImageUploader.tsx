@@ -11,6 +11,8 @@ import { useStageStore } from '@/lib/store';
 import type { Scene, Stage } from '@/lib/types/stage';
 import { cn } from '@/lib/utils';
 import { getModelApiHeaders } from '@/lib/utils/model-config';
+import { getRuntimePlatform } from '@/lib/runtime/platform';
+import { recognizeImageTextLocally } from '@/lib/runtime/local-documents';
 
 type InitialStage = 'Debate_Flow' | 'wait_for_user_teaching';
 
@@ -261,6 +263,35 @@ function parseConfigText(value: string): BingoVisionConfig {
   return normalizeConfigForStore(parsed as BingoVisionConfig);
 }
 
+function buildLocalOcrConfig(text: string, fileName: string): BingoVisionConfig {
+  const firstLine = text
+    .split('\n')
+    .map((line) => line.trim())
+    .find(Boolean);
+  const discussionTopic =
+    firstLine?.slice(0, 80) || fileName.replace(/\.[^.]+$/, '') || '图片题目讨论';
+  return normalizeConfigForStore({
+    discussionTopic,
+    initialStage: 'wait_for_user_teaching',
+    extractedMarkdown: text,
+    agents: [
+      {
+        id: 'vision-agent-analyzer',
+        name: '分析者',
+        role: '解题分析',
+        initialViewpoint: '先梳理题目条件、目标和关键信息。',
+      },
+      {
+        id: 'vision-agent-checker',
+        name: '检验者',
+        role: '思路检验',
+        initialViewpoint: '检查识别文字和解题思路中的遗漏或歧义。',
+      },
+    ],
+    teacherGuide: ['确认 OCR 文字是否准确', '补充图片中未被识别的公式或图形条件'],
+  });
+}
+
 export function ImageUploader({ className, onGenerated }: ImageUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -294,18 +325,23 @@ export function ImageUploader({ className, onGenerated }: ImageUploaderProps) {
       const imageDataUrl = await compressImage(file);
       setPreviewDataUrl(imageDataUrl);
 
-      const response = await fetch('/api/question-vision', {
-        method: 'POST',
-        headers: getModelApiHeaders(),
-        body: JSON.stringify({ imageDataUrl, fileName: file.name }),
-      });
-      const data = (await response.json()) as QuestionVisionResponse;
+      let normalized: BingoVisionConfig;
+      if (getRuntimePlatform() === 'ipados') {
+        const recognizedText = await recognizeImageTextLocally(imageDataUrl);
+        normalized = buildLocalOcrConfig(recognizedText, file.name);
+      } else {
+        const response = await fetch('/api/question-vision', {
+          method: 'POST',
+          headers: getModelApiHeaders(),
+          body: JSON.stringify({ imageDataUrl, fileName: file.name }),
+        });
+        const data = (await response.json()) as QuestionVisionResponse;
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.success ? '视觉模型处理失败' : data.error);
+        if (!response.ok || !data.success) {
+          throw new Error(data.success ? '视觉模型处理失败' : data.error);
+        }
+        normalized = normalizeConfigForStore(data.config);
       }
-
-      const normalized = normalizeConfigForStore(data.config);
       setMarkdownText(normalized.extractedMarkdown);
       setConfigText(JSON.stringify(normalized, null, 2));
     } catch (caught) {

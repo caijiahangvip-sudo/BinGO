@@ -28,6 +28,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { TTSProviderId } from '@/lib/audio/types';
 import type { ProviderWithVoices } from '@/lib/audio/voice-resolver';
+import { isBrowserTtsAllowed } from '@/lib/runtime/platform';
+import { resolveRuntimeTtsProvider } from '@/lib/runtime/audio-routing';
 
 function AgentVoicePill({
   agent,
@@ -88,7 +90,10 @@ function AgentVoicePill({
       const previewText = courseLanguage === 'en-US' ? 'Welcome to AI Classroom' : '欢迎来到AI课堂';
 
       const providerConfig = ttsProvidersConfig[providerId];
-      const compatibleProviderId = providerConfig?.compatibleProviderId || providerId;
+      const compatibleProviderId = resolveRuntimeTtsProvider(
+        providerId,
+        providerConfig?.compatibleProviderId || providerId,
+      );
 
       if (compatibleProviderId === 'browser-native-tts') {
         const { promise, cancel } = playBrowserTTSPreview({ text: previewText, voice: voiceId });
@@ -319,7 +324,10 @@ function TeacherVoicePill({
       const previewText = courseLanguage === 'en-US' ? 'Welcome to AI Classroom' : '欢迎来到AI课堂';
 
       const providerConfig = ttsProvidersConfig[providerId];
-      const compatibleProviderId = providerConfig?.compatibleProviderId || providerId;
+      const compatibleProviderId = resolveRuntimeTtsProvider(
+        providerId,
+        providerConfig?.compatibleProviderId || providerId,
+      );
 
       if (compatibleProviderId === 'browser-native-tts') {
         const { promise, cancel } = playBrowserTTSPreview({ text: previewText, voice: voiceId });
@@ -504,7 +512,7 @@ export function AgentBar() {
 
   // Load browser native TTS voices
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    if (!isBrowserTtsAllowed() || typeof window === 'undefined' || !window.speechSynthesis) return;
     const loadVoices = () => setBrowserVoices(speechSynthesis.getVoices());
     loadVoices();
     speechSynthesis.addEventListener('voiceschanged', loadVoices);

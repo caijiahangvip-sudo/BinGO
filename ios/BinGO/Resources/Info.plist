@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key>
+  <string>BinGO</string>
+  <key>CFBundleIdentifier</key>
+  <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+  <key>CFBundleName</key>
+  <string>$(PRODUCT_NAME)</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>UILaunchScreen</key>
+  <dict/>
+  <key>UISupportedInterfaceOrientations~ipad</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationPortraitUpsideDown</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+  <key>NSCameraUsageDescription</key>
+  <string>BinGO 使用相机拍摄题目和课堂资料。</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>BinGO 使用麦克风进行课堂语音输入。</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>BinGO 使用系统语音识别将课堂发言转换为文字。</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>BinGO 读取照片用于 OCR、课件和作业。</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>BinGO 可连接你的局域网 BinGO API 服务器。</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+</dict>
+</plist>

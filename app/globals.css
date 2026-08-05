@@ -571,3 +571,37 @@
     transform: translateX(100%);
   }
 }
+
+html[data-bingo-platform='ipados'] {
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+html[data-bingo-platform='ipados'] body {
+  min-height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html[data-bingo-platform='ipados'] input,
+html[data-bingo-platform='ipados'] textarea,
+html[data-bingo-platform='ipados'] [contenteditable='true'] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+html[data-bingo-platform='ipados'] button,
+html[data-bingo-platform='ipados'] [role='button'] {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+@media (pointer: coarse) {
+  html[data-bingo-platform='ipados'] [data-radix-popper-content-wrapper] {
+    max-width: calc(100vw - 24px);
+  }
+}

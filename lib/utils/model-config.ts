@@ -1,6 +1,7 @@
 import { useSettingsStore } from '@/lib/store/settings';
 import type { ProviderId } from '@/lib/types/provider';
 import type { ProvidersConfig } from '@/lib/types/settings';
+import { getEffectiveModels } from '@/lib/store/settings-validation';
 
 export type ModelConfigProfile = 'main' | 'lightweight';
 export type ResolvedModelConfig = ReturnType<typeof buildModelConfig>;
@@ -11,7 +12,7 @@ function getFirstConfiguredModelId(
 ): string {
   const providerConfig = providersConfig?.[providerId as ProviderId];
 
-  return providerConfig?.serverModels?.[0] || providerConfig?.models?.[0]?.id || '';
+  return getEffectiveModels(providerConfig)[0]?.id ?? '';
 }
 
 function resolveModelConfig(profile: ModelConfigProfile) {

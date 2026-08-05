@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#07111f" />
+    <title>BinGO</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./config.js"></script>
+  </head>
+  <body>
+    <main>
+      <section class="brand">
+        <div class="app-icon">B</div>
+        <div>
+          <p class="eyebrow">BinGO iPad 原生客户端</p>
+          <h1>你的移动课堂</h1>
+          <p class="description">课件、批注、语音、识别和课堂资料优先在 iPad 本地运行；需要大语言模型时再安全连接云端。</p>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="ready-title">
+        <p class="eyebrow" id="ready-title">本地运行时已就绪</p>
+        <div class="capabilities">
+          <span>课件与批注</span>
+          <span>Apple 本地语音</span>
+          <span>相机与 OCR</span>
+          <span>PDF 阅读</span>
+        </div>
+        <p id="status" role="status">首次使用时，请在 BinGO 设置中配置云端大语言模型。</p>
+      </section>
+
+      <form id="cloud-api-form" class="card">
+        <label for="cloud-api-url">云端 API 地址（可选）</label>
+        <input
+          id="cloud-api-url"
+          name="cloud-api-url"
+          type="url"
+          inputmode="url"
+          autocomplete="url"
+          placeholder="https://api.example.com"
+        />
+        <label for="cloud-app-url">BinGO 云端页面地址</label>
+        <input
+          id="cloud-app-url"
+          name="cloud-app-url"
+          type="url"
+          inputmode="url"
+          autocomplete="url"
+          placeholder="https://bingo.example.com"
+        />
+        <label for="cloud-api-token">云端 API 令牌（可选）</label>
+        <input
+          id="cloud-api-token"
+          name="cloud-api-token"
+          type="password"
+          autocomplete="off"
+          placeholder="留空表示云端服务不要求令牌"
+        />
+        <button type="submit">保存云端地址</button>
+        <button id="open-cloud-app" class="secondary" type="button">打开完整 BinGO</button>
+        <button id="clear-cloud-api" class="secondary" type="button">清除云端配置</button>
+        <p class="hint">这里只配置云端服务，不会连接你的 Windows 电脑。课堂资料和本地能力仍保存在 iPad。</p>
+      </form>
+    </main>
+    <script src="./main.js"></script>
+  </body>
+</html>

@@ -4,6 +4,7 @@ import { useCallback, useRef } from 'react';
 import { useStageStore } from '@/lib/store/stage';
 import { getModelApiHeaders } from '@/lib/utils/model-config';
 import { useSettingsStore } from '@/lib/store/settings';
+import { resolveRuntimeTtsProvider } from '@/lib/runtime/audio-routing';
 import { db } from '@/lib/utils/database';
 import type { SceneOutline, PdfImage, ImageMapping } from '@/lib/types/generation';
 import type { AgentInfo } from '@/lib/generation/generation-pipeline';
@@ -57,7 +58,10 @@ function getTTSRuntime() {
   const settings = useSettingsStore.getState();
   const providerId = settings.ttsProviderId;
   const providerConfig = settings.ttsProvidersConfig?.[providerId];
-  const compatibleProviderId = providerConfig?.compatibleProviderId || providerId;
+  const compatibleProviderId = resolveRuntimeTtsProvider(
+    providerId,
+    providerConfig?.compatibleProviderId || providerId,
+  );
 
   return {
     enabled: settings.ttsEnabled && compatibleProviderId !== 'browser-native-tts',
@@ -173,7 +177,10 @@ export async function generateAndStoreTTS(
 ): Promise<void> {
   const settings = useSettingsStore.getState();
   const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
-  const ttsCompatibleProviderId = ttsProviderConfig?.compatibleProviderId || settings.ttsProviderId;
+  const ttsCompatibleProviderId = resolveRuntimeTtsProvider(
+    settings.ttsProviderId,
+    ttsProviderConfig?.compatibleProviderId || settings.ttsProviderId,
+  );
   if (ttsCompatibleProviderId === 'browser-native-tts') return;
 
   const response = await fetch('/api/generate/tts', {

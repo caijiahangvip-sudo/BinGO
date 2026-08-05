@@ -334,6 +334,44 @@ describe('slide element layout repair', () => {
     expect(repaired.slice(3)).toEqual(elements.slice(3));
   });
 
+  it('removes overlapping duplicate text layers inside the same card', () => {
+    const elements = [
+      shape('card', 520, 270, 390, 66, '#d9e7ec'),
+      text(
+        'card-title',
+        520,
+        270,
+        390,
+        66,
+        '<p style="font-size: 17px; font-weight: 700;">新集体提供认识伙伴、学习合...</p>',
+      ),
+      text(
+        'card-detail',
+        520,
+        270,
+        390,
+        66,
+        '<p style="font-size: 14px;">新集体提供认识伙伴、学习合作的机会</p>',
+      ),
+    ];
+
+    const repaired = repairCardTextOverlayLayout(elements);
+
+    expect(repaired.map((element) => element.id)).toEqual(['card', 'card-detail']);
+  });
+
+  it('keeps stacked heading and detail text inside the same card', () => {
+    const elements = [
+      shape('card', 520, 186, 390, 66, '#dce8c9'),
+      text('card-title', 544, 198, 342, 26, '<p style="font-size: 17px;">探索机会</p>'),
+      text('card-detail', 544, 224, 342, 22, '<p style="font-size: 14px;">发现兴趣与潜能</p>'),
+    ];
+
+    const repaired = repairShortLabelBoxAlignment(elements);
+
+    expect(repaired).toBe(elements);
+  });
+
   it('keeps standalone shape text when there is no overlay text element', () => {
     const elements = [shapeWithText('card', 100, 180, 260, 96, '#dbeafe', '关键')];
 

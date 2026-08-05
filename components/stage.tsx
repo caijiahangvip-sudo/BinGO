@@ -1,11 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo, useCallback, type CSSProperties } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useStageStore } from '@/lib/store';
 import { PENDING_SCENE_ID } from '@/lib/store/stage';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
-import { TOUR_STEPS, useTourStore, type TourStepDefinition } from '@/lib/store/tour';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { SceneSidebar } from './stage/scene-sidebar';
 import { Header } from './header';
@@ -41,10 +40,7 @@ import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   Loader2,
-  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { VisuallyHidden } from 'radix-ui';
@@ -54,191 +50,6 @@ import type { Scene } from '@/lib/types/stage';
 
 const USER_TEACHING_PROMPT = '请在白板上画出你的思路，并发送你的讲解。';
 const USER_REQUESTED_HINT_MESSAGE = '[USER_REQUESTED_HINT]';
-const TOUR_TEACHBACK_PROMPT = '现在轮到你当小老师了。请在白板上随意涂鸦，并点击发送讲解。';
-
-type TourTargetRect = {
-  top: number;
-  left: number;
-  width: number;
-  height: number;
-};
-
-function getTourPopoverPosition(
-  rect: TourTargetRect | null,
-  placement: TourStepDefinition['placement'],
-): CSSProperties {
-  if (!rect) {
-    return {
-      left: '50%',
-      top: '50%',
-      transform: 'translate(-50%, -50%)',
-    };
-  }
-
-  const margin = 16;
-  const maxWidth = 360;
-  const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth;
-  const viewportHeight = typeof window === 'undefined' ? 720 : window.innerHeight;
-  const centeredLeft = Math.min(
-    viewportWidth - maxWidth - margin,
-    Math.max(margin, rect.left + rect.width / 2 - maxWidth / 2),
-  );
-
-  if (placement === 'top') {
-    return {
-      left: centeredLeft,
-      top: Math.max(margin, rect.top - 190),
-    };
-  }
-
-  if (placement === 'bottom') {
-    return {
-      left: centeredLeft,
-      top: Math.min(viewportHeight - 220, rect.top + rect.height + margin),
-    };
-  }
-
-  if (placement === 'left') {
-    return {
-      left: Math.max(margin, rect.left - maxWidth - margin),
-      top: Math.min(viewportHeight - 220, Math.max(margin, rect.top + rect.height / 2 - 100)),
-    };
-  }
-
-  return {
-    left: Math.min(viewportWidth - maxWidth - margin, rect.left + rect.width + margin),
-    top: Math.min(viewportHeight - 220, Math.max(margin, rect.top + rect.height / 2 - 100)),
-  };
-}
-
-function TourOverlay({
-  step,
-  currentStep,
-  totalSteps,
-  onNext,
-  onPrevious,
-  onClose,
-}: {
-  readonly step: TourStepDefinition;
-  readonly currentStep: number;
-  readonly totalSteps: number;
-  readonly onNext: () => void;
-  readonly onPrevious: () => void;
-  readonly onClose: () => void;
-}) {
-  const [targetRect, setTargetRect] = useState<TourTargetRect | null>(null);
-
-  useEffect(() => {
-    const updateTargetRect = () => {
-      const target = document.querySelector<HTMLElement>(`[data-tour-target="${step.targetId}"]`);
-      if (!target) {
-        setTargetRect(null);
-        return;
-      }
-
-      const rect = target.getBoundingClientRect();
-      const padding = 8;
-      setTargetRect({
-        top: Math.max(0, rect.top - padding),
-        left: Math.max(0, rect.left - padding),
-        width: rect.width + padding * 2,
-        height: rect.height + padding * 2,
-      });
-    };
-
-    updateTargetRect();
-    const interval = window.setInterval(updateTargetRect, 250);
-    window.addEventListener('resize', updateTargetRect);
-    window.addEventListener('scroll', updateTargetRect, true);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener('resize', updateTargetRect);
-      window.removeEventListener('scroll', updateTargetRect, true);
-    };
-  }, [step.targetId]);
-
-  const popoverStyle = getTourPopoverPosition(targetRect, step.placement);
-  const isLastStep = currentStep >= totalSteps;
-  const top = targetRect?.top ?? 0;
-  const left = targetRect?.left ?? 0;
-  const width = targetRect?.width ?? 0;
-  const height = targetRect?.height ?? 0;
-  const right = left + width;
-  const bottom = top + height;
-
-  return (
-    <div className="fixed inset-0 z-[260] pointer-events-none" aria-live="polite">
-      {targetRect ? (
-        <>
-          <div
-            className="absolute left-0 right-0 top-0 bg-gray-950/62 pointer-events-auto"
-            style={{ height: top }}
-          />
-          <div
-            className="absolute left-0 bg-gray-950/62 pointer-events-auto"
-            style={{ top, width: left, height }}
-          />
-          <div
-            className="absolute bg-gray-950/62 pointer-events-auto"
-            style={{ top, left: right, right: 0, height }}
-          />
-          <div
-            className="absolute left-0 right-0 bottom-0 bg-gray-950/62 pointer-events-auto"
-            style={{ top: bottom }}
-          />
-          <div
-            className="absolute rounded-lg border-2 border-cyan-300 shadow-[0_0_0_4px_rgba(103,232,249,0.18),0_0_32px_rgba(34,211,238,0.45)] pointer-events-none"
-            style={{ top, left, width, height }}
-          />
-        </>
-      ) : (
-        <div className="absolute inset-0 bg-gray-950/62 pointer-events-auto" />
-      )}
-
-      <div
-        className="absolute w-[min(360px,calc(100vw-2rem))] rounded-lg border border-gray-200 bg-white p-4 shadow-2xl pointer-events-auto dark:border-gray-700 dark:bg-gray-900"
-        style={popoverStyle}
-      >
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div>
-            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-cyan-600 dark:text-cyan-300">
-              Step {currentStep} / {totalSteps}
-            </div>
-            <h2 className="text-base font-bold text-gray-900 dark:text-gray-100">{step.title}</h2>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-            aria-label="关闭导览"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <p className="text-sm leading-6 text-gray-600 dark:text-gray-300">{step.description}</p>
-        <div className="mt-4 flex items-center justify-between">
-          <button
-            type="button"
-            onClick={onPrevious}
-            disabled={currentStep <= 1}
-            className="inline-flex h-9 items-center gap-1 rounded-md border border-gray-200 px-3 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            上一步
-          </button>
-          <button
-            type="button"
-            onClick={onNext}
-            className="inline-flex h-9 items-center gap-1 rounded-md bg-cyan-600 px-3 text-sm font-medium text-white transition-colors hover:bg-cyan-700"
-          >
-            {isLastStep ? '完成' : '下一步'}
-            {!isLastStep && <ChevronRight className="h-4 w-4" />}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /**
  * Stage Component
@@ -265,12 +76,6 @@ export function Stage({
     useStageStore();
   const stage = useStageStore((s) => s.stage);
   const failedOutlines = useStageStore.use.failedOutlines();
-  const isTourActive = useTourStore.use.isTourActive();
-  const currentTourStep = useTourStore.use.currentStep();
-  const endTour = useTourStore.use.endTour();
-  const nextTourStep = useTourStore.use.nextStep();
-  const previousTourStep = useTourStore.use.previousStep();
-  const activeTourStep = TOUR_STEPS[currentTourStep - 1] ?? TOUR_STEPS[0];
 
   const currentScene = getCurrentScene();
 
@@ -380,21 +185,6 @@ export function Stage({
     return agents[0]?.id || 'default-1';
   }, [selectedAgentIds]);
 
-  const pickTourDebateAgents = useCallback((): { agentAId: string; agentBId: string } => {
-    const registry = useAgentRegistry.getState();
-    const candidateIds =
-      selectedAgentIds.length > 0 ? selectedAgentIds : ['default-1', 'default-2'];
-    const candidates = candidateIds
-      .map((id) => registry.getAgent(id))
-      .filter((agent): agent is AgentConfig => agent != null);
-    const agentA = candidates.find((agent) => agent.role === 'teacher')?.id || 'default-1';
-    const agentB =
-      candidates.find((agent) => agent.id !== agentA && agent.role !== 'teacher')?.id ||
-      (agentA === 'default-2' ? 'default-1' : 'default-2');
-
-    return { agentAId: agentA, agentBId: agentB };
-  }, [selectedAgentIds]);
-
   const engineRef = useRef<PlaybackEngine | null>(null);
   const audioPlayerRef = useRef(createAudioPlayer());
   const chatAreaRef = useRef<ChatAreaRef>(null);
@@ -408,10 +198,7 @@ export function Stage({
     initialEditCount: number;
     hasWhiteboardEdit: boolean;
     hasUserMessage: boolean;
-    createdByTour?: boolean;
   } | null>(null);
-  const tourTeachingActiveRef = useRef(false);
-  const triggeredTourStepsRef = useRef(new Set<number>());
   // Guard to prevent double flash when manual stop triggers onDiscussionEnd
   const manualStopRef = useRef(false);
   // Monotonic counter incremented on each scene switch — used to discard stale SSE callbacks
@@ -499,10 +286,6 @@ export function Stage({
     if (!pending || !pending.hasUserMessage || !pending.hasWhiteboardEdit) return;
 
     pendingTeachingWaitRef.current = null;
-    if (pending.createdByTour) {
-      tourTeachingActiveRef.current = false;
-      useCanvasStore.getState().setStudentTeachingState(false, null);
-    }
     setIsCueUser(false);
     setCueUserPrompt(null);
     pending.resolve();
@@ -518,34 +301,6 @@ export function Stage({
     setCueUserPrompt(null);
     pending.resolve();
   }, []);
-
-  const handleEndTour = useCallback(() => {
-    triggeredTourStepsRef.current.clear();
-    if (pendingTeachingWaitRef.current?.createdByTour) {
-      cancelPendingTeachingWait();
-    } else if (tourTeachingActiveRef.current) {
-      useCanvasStore.getState().setStudentTeachingState(false, null);
-    }
-    tourTeachingActiveRef.current = false;
-    endTour();
-    trackEvent('icap_tour', {
-      type: 'tour_closed',
-      stageId: useStageStore.getState().stage?.id ?? null,
-      step: currentTourStep,
-    });
-  }, [cancelPendingTeachingWait, currentTourStep, endTour]);
-
-  const handleTourNext = useCallback(() => {
-    if (currentTourStep >= TOUR_STEPS.length) {
-      handleEndTour();
-      return;
-    }
-    nextTourStep();
-  }, [currentTourStep, handleEndTour, nextTourStep]);
-
-  const handleTourPrevious = useCallback(() => {
-    previousTourStep();
-  }, [previousTourStep]);
 
   const handleWaitForUserTeaching = useCallback(
     (action: WaitForUserTeachingAction) =>
@@ -682,90 +437,6 @@ export function Stage({
     await chatAreaRef.current?.endActiveSession();
     doSessionCleanup();
   }, [doSessionCleanup]);
-
-  useEffect(() => {
-    if (!isTourActive || triggeredTourStepsRef.current.has(currentTourStep)) return;
-
-    triggeredTourStepsRef.current.add(currentTourStep);
-
-    if (currentTourStep === 1) {
-      useStageStore.getState().setMode('playback');
-      setChatAreaCollapsed(false);
-      return;
-    }
-
-    if (currentTourStep === 2) {
-      const { agentAId, agentBId } = pickTourDebateAgents();
-      setWhiteboardOpen(true);
-      setChatAreaCollapsed(false);
-      chatAreaRef.current?.switchToTab('chat');
-      setChatIsStreaming(true);
-      setChatSessionType('discussion');
-      setThinkingState({ stage: 'director' });
-
-      void chatAreaRef.current
-        ?.startDiscussion({
-          topic: 'BinGo ICAP 互动课堂是否比传统讲授更能促进深度学习？',
-          prompt:
-            'This is an onboarding tour debate. Agent A must argue the affirmative side and Agent B must argue the opposing side. Keep each turn short and write visible claims on the whiteboard.',
-          agentId: agentAId,
-          discussionMode: 'debate',
-          debateConfig: {
-            agentAId,
-            agentBId,
-            topic: 'BinGo ICAP 互动课堂是否比传统讲授更能促进深度学习？',
-            agentAPersona: '支持方：强调 ICAP、多模态白板和实时反馈带来的深度学习价值。',
-            agentBPersona: '反方：强调认知负荷、注意力分散和教师引导成本。',
-          },
-        })
-        .catch((error) => {
-          setChatIsStreaming(false);
-          setChatSessionType(null);
-          setThinkingState(null);
-          console.warn('[Tour] Failed to start debate flow:', error);
-        });
-      return;
-    }
-
-    if (currentTourStep === 3) {
-      void chatAreaRef.current?.endActiveSession();
-      doSessionCleanup();
-      setWhiteboardOpen(true);
-      setChatAreaCollapsed(false);
-      chatAreaRef.current?.switchToTab('chat');
-      useCanvasStore.getState().setStudentTeachingState(true, TOUR_TEACHBACK_PROMPT);
-      tourTeachingActiveRef.current = true;
-      pendingTeachingWaitRef.current = {
-        resolve: () => undefined,
-        initialEditCount: useCanvasStore.getState().studentTeachingEditCount,
-        hasWhiteboardEdit: false,
-        hasUserMessage: false,
-        createdByTour: true,
-      };
-      setIsCueUser(true);
-      setCueUserPrompt(TOUR_TEACHBACK_PROMPT);
-      return;
-    }
-
-    if (currentTourStep === 4) {
-      if (pendingTeachingWaitRef.current?.createdByTour) {
-        cancelPendingTeachingWait();
-      } else if (tourTeachingActiveRef.current) {
-        useCanvasStore.getState().setStudentTeachingState(false, null);
-      }
-      tourTeachingActiveRef.current = false;
-      setWhiteboardOpen(false);
-      setChatAreaCollapsed(false);
-    }
-  }, [
-    cancelPendingTeachingWait,
-    currentTourStep,
-    doSessionCleanup,
-    isTourActive,
-    pickTourDebateAgents,
-    setChatAreaCollapsed,
-    setWhiteboardOpen,
-  ]);
 
   const clearPresentationIdleTimer = useCallback(() => {
     if (presentationIdleTimerRef.current) {
@@ -1582,7 +1253,6 @@ export function Stage({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  data-tour-target="profile-panel"
                   onClick={() =>
                     toast.info('学习画像会汇总 Teach-back、Debate 和课堂问答形成长期证据。')
                   }
@@ -1625,7 +1295,6 @@ export function Stage({
 
         {/* Canvas Area */}
         <div
-          data-tour-target="debate-whiteboard"
           className="overflow-hidden relative flex-1 min-h-0 isolate"
           style={{
             height: sceneViewerHeight,
@@ -1670,25 +1339,11 @@ export function Stage({
             }
             onNeedTeachingHint={handleNeedTeachingHint}
           />
-          {isTourActive && currentTourStep === 2 && (
-            <div className="pointer-events-none absolute inset-0 z-[150] flex items-stretch justify-center p-6">
-              <div className="relative h-full w-full rounded-lg border border-cyan-300/70">
-                <div className="absolute left-1/2 top-0 h-full w-px bg-cyan-300/80" />
-                <div className="absolute left-4 top-4 rounded-md bg-cyan-950/75 px-3 py-1 text-xs font-semibold text-cyan-50">
-                  Agent A 正方区
-                </div>
-                <div className="absolute right-4 top-4 rounded-md bg-cyan-950/75 px-3 py-1 text-xs font-semibold text-cyan-50">
-                  Agent B 反方区
-                </div>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Roundtable Area */}
         {mode === 'playback' && (
           <div
-            data-tour-target="playback-controls"
             className={cn(
               'transition-opacity duration-300',
               !isPresenting && 'shrink-0',
@@ -1889,17 +1544,6 @@ export function Stage({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {isTourActive && activeTourStep && (
-        <TourOverlay
-          step={activeTourStep}
-          currentStep={currentTourStep}
-          totalSteps={TOUR_STEPS.length}
-          onNext={handleTourNext}
-          onPrevious={handleTourPrevious}
-          onClose={handleEndTour}
-        />
-      )}
     </div>
   );
 }

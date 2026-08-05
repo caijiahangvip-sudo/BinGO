@@ -48,3 +48,27 @@ export function validateModel(
   if (availableModels.some((m) => m.id === currentModelId)) return currentModelId;
   return availableModels[0]?.id ?? '';
 }
+
+/**
+ * Compute the effective runtime model list for a provider.
+ *
+ * The user-owned `models` list is always preserved for persistence. When a
+ * provider is server-configured and the client has no API key of its own,
+ * runtime selection (UI list, validation, auto-select) must be restricted to
+ * `serverModels`. With a client key, the user-owned list is fully available.
+ */
+export function getEffectiveModels<
+  T extends {
+    models?: Array<{ id: string }>;
+    serverModels?: string[];
+    isServerConfigured?: boolean;
+    apiKey?: string;
+  },
+>(cfg: T | undefined): Array<{ id: string }> {
+  const models = cfg?.models ?? [];
+  if (cfg?.isServerConfigured && !cfg.apiKey && cfg.serverModels?.length) {
+    const allowed = new Set(cfg.serverModels);
+    return models.filter((m) => allowed.has(m.id));
+  }
+  return models;
+}

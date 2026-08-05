@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useSettingsStore, type SettingsState } from '@/lib/store/settings';
+import { getRuntimePlatform, isTauriRuntime } from '@/lib/runtime/platform';
 
 type SecretScope =
   | 'llm'
@@ -29,10 +30,6 @@ const SECRET_CONFIGS: Array<{ scope: SecretScope; key: ConfigKey }> = [
   { scope: 'web-search', key: 'webSearchProvidersConfig' },
 ];
 
-function isTauriRuntime() {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-}
-
 function secretSnapshot(state: SettingsState) {
   return SECRET_CONFIGS.flatMap(({ scope, key }) =>
     Object.entries(state[key]).map(([providerId, config]) => ({
@@ -50,7 +47,7 @@ export function DesktopSecretBootstrap() {
   const syncing = useRef(false);
 
   useEffect(() => {
-    if (!isTauriRuntime()) {
+    if (!isTauriRuntime() || getRuntimePlatform() === 'ipados') {
       useSettingsStore.getState().setSecretHydrationState(true);
       return;
     }

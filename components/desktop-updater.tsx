@@ -3,10 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useDesktopUpdaterStore } from '@/lib/store/desktop-updater';
-
-function isTauriRuntime() {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-}
+import { getRuntimePlatform, isTauriRuntime } from '@/lib/runtime/platform';
 
 const RETRY_DELAYS = [60_000, 5 * 60_000, 30 * 60_000];
 const PERIODIC_CHECK_INTERVAL = 6 * 60 * 60_000;
@@ -18,7 +15,13 @@ export function DesktopUpdater() {
   const announcedVersion = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!isTauriRuntime() || process.env.NODE_ENV !== 'production') return;
+    if (
+      !isTauriRuntime() ||
+      getRuntimePlatform() !== 'desktop' ||
+      process.env.NODE_ENV !== 'production'
+    ) {
+      return;
+    }
     const timers: number[] = [];
     let disposed = false;
 

@@ -599,7 +599,6 @@ export function Whiteboard({ isOpen, onClose, onNeedHint }: WhiteboardProps) {
               <AnimatePresence>
                 {studentTeachingEnabled && (
                   <motion.div
-                    data-tour-target="teachback-toolbar"
                     initial={{ opacity: 0, y: -8 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -8 }}

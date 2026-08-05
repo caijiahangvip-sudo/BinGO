@@ -1,0 +1,26 @@
+{
+  "name": "@bingo/sync-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hocuspocus/extension-database": "^4.0.0",
+    "@hocuspocus/server": "^4.0.0",
+    "fastify": "^5.6.0",
+    "pg": "^8.16.0",
+    "yjs": "^13.6.27",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/pg": "^8.15.5",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

@@ -4,29 +4,39 @@ import { createSelectors } from '@/lib/utils/create-selectors';
 import type { ChatSession } from '@/lib/types/chat';
 import type { SceneOutline } from '@/lib/types/generation';
 import { createLogger } from '@/lib/logger';
-import { repairTriadDiagramAlignment } from '@/lib/utils/slide-element-layout';
+import {
+  repairCardTextOverlayLayout,
+  repairTriadDiagramAlignment,
+} from '@/lib/utils/slide-element-layout';
+import { normalizeSlideContent } from '@/lib/utils/slide-content-normalization';
+import type { ColorThemeId } from '@/lib/theme/color-themes';
 
 const log = createLogger('StageStore');
 
 /** Virtual scene ID used when the user navigates to a page still being generated */
 export const PENDING_SCENE_ID = '__pending__';
 
-function repairStoredSceneTriadDiagrams(scenes: Scene[]): { scenes: Scene[]; changed: boolean } {
+function repairStoredScenes(
+  scenes: Scene[],
+  visualTheme?: ColorThemeId,
+): { scenes: Scene[]; changed: boolean } {
   let changed = false;
   const repairedScenes = scenes.map((scene) => {
-    if (scene.type !== 'slide' || scene.content.type !== 'slide') return scene;
+    if (scene.type !== 'slide') return scene;
 
-    const elements = scene.content.canvas.elements;
-    const repairedElements = repairTriadDiagramAlignment(elements);
-    if (repairedElements === elements) return scene;
+    const normalized = normalizeSlideContent(scene.content, visualTheme);
+    const elements = normalized.content.canvas.elements;
+    const deduplicatedElements = repairCardTextOverlayLayout(elements);
+    const repairedElements = repairTriadDiagramAlignment(deduplicatedElements);
+    if (!normalized.changed && repairedElements === elements) return scene;
 
     changed = true;
     return {
       ...scene,
       content: {
-        ...scene.content,
+        ...normalized.content,
         canvas: {
-          ...scene.content.canvas,
+          ...normalized.content.canvas,
           elements: repairedElements,
         },
       },
@@ -299,7 +309,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       // (e.g. navigated from generation-preview with fresh in-memory data)
       const currentState = get();
       if (currentState.stage?.id === stageId && currentState.scenes.length > 0) {
-        const repaired = repairStoredSceneTriadDiagrams(currentState.scenes);
+        const repaired = repairStoredScenes(currentState.scenes, currentState.stage.visualTheme);
         if (repaired.changed) {
           set({ scenes: repaired.scenes });
           await get().saveToStorage();
@@ -318,7 +328,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       const outlines = outlinesRecord?.outlines || [];
 
       if (data) {
-        const repaired = repairStoredSceneTriadDiagrams(data.scenes);
+        const repaired = repairStoredScenes(data.scenes, data.stage.visualTheme);
         set({
           stage: data.stage,
           scenes: repaired.scenes,

@@ -28,6 +28,71 @@ function absoluteLineEndpoints(element: PPTLineElement) {
 }
 
 describe('slide content fallback', () => {
+  it('uses one centered note label when split-note points have no detail separator', () => {
+    const outline: SceneOutline = {
+      id: 'scene_split_notes',
+      type: 'slide',
+      title: '新变化带来新机会',
+      description: '发现变化背后的成长可能。',
+      keyPoints: [
+        '新课程帮助我们探索兴趣和潜能',
+        '新集体提供认识伙伴、学习合作的机会',
+        '社团与实践活动让特长得到发展',
+      ],
+      order: 3,
+      language: 'zh-CN',
+    };
+
+    const content = buildFallbackSlideContent(
+      outline,
+      undefined,
+      undefined,
+      undefined,
+      'split-visual-notes',
+    );
+
+    for (let index = 1; index <= 3; index += 1) {
+      expect(
+        content.elements.filter((element) =>
+          element.id.startsWith(`fallback_split_note_${index}`),
+        ),
+      ).toHaveLength(1);
+      expect(
+        content.elements.some((element) => element.id === `fallback_split_note_detail_${index}`),
+      ).toBe(false);
+    }
+  });
+
+  it('keeps separate heading and detail rows when split-note points use a separator', () => {
+    const outline: SceneOutline = {
+      id: 'scene_split_notes_detail',
+      type: 'slide',
+      title: '新变化带来新机会',
+      description: '发现变化背后的成长可能。',
+      keyPoints: ['课程：探索兴趣和潜能', '集体：认识伙伴并学习合作', '实践：让特长得到发展'],
+      order: 3,
+      language: 'zh-CN',
+    };
+
+    const content = buildFallbackSlideContent(
+      outline,
+      undefined,
+      undefined,
+      undefined,
+      'split-visual-notes',
+    );
+    const title = content.elements.find(
+      (element) => element.id === 'fallback_split_note_title_1',
+    );
+    const detail = content.elements.find(
+      (element) => element.id === 'fallback_split_note_detail_1',
+    );
+
+    expect(title).toBeDefined();
+    expect(detail).toBeDefined();
+    expect(title!.top).toBeLessThan(detail!.top);
+  });
+
   it('filters internal classroom policy text from visible fallback content', () => {
     const outline: SceneOutline = {
       id: 'scene_1',

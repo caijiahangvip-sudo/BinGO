@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "ipad",
+  "description": "Permissions for the native BinGO iPad client.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://*:*", "https://*/*"]
+  },
+  "permissions": ["core:default", "allow-ipad-runtime"]
+}

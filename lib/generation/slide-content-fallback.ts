@@ -474,6 +474,31 @@ function buildSplitVisualNotesFallback(
     const parsed = splitPoint(point);
     elements.push(
       shapeElement(`fallback_split_note_${index + 1}`, 520, top, 390, 66, noteFills[index]),
+    );
+
+    if (!parsed.detail) {
+      elements.push(
+        textElement(
+          `fallback_split_note_title_${index + 1}`,
+          544,
+          top,
+          342,
+          66,
+          paragraph(trimVisual(point, 28), {
+            fontSize: 16,
+            color: palette.title,
+            weight: 700,
+            lineHeight: 1.2,
+            align: 'center',
+          }),
+          palette.title,
+          'itemTitle',
+        ),
+      );
+      return;
+    }
+
+    elements.push(
       textElement(
         `fallback_split_note_title_${index + 1}`,
         544,
@@ -495,7 +520,7 @@ function buildSplitVisualNotesFallback(
         top + 38,
         342,
         22,
-        paragraph(parsed.detail || trimVisual(point, 28), {
+        paragraph(parsed.detail, {
           fontSize: 14,
           color: palette.text,
           lineHeight: 1.2,

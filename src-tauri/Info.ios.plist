@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>BinGO 需要麦克风权限用于课堂语音识别和互动。</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>BinGO 需要使用 iPad 的语音识别功能，将课堂发言转换为文字。</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>BinGO 需要读取照片，以便插入课件图片和提交题目图片。</string>
+  <key>NSCameraUsageDescription</key>
+  <string>BinGO 需要相机权限用于拍摄题目和课堂素材。</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+  <key>UISupportedInterfaceOrientations~ipad</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationPortraitUpsideDown</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+</dict>
+</plist>

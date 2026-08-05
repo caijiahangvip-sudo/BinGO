@@ -4127,6 +4127,12 @@ function isContainedOverlayText(shapeRect: Rect, textRect: Rect): boolean {
   return overlapArea(shapeRect, textRect) / textArea >= CARD_TEXT_OVERLAY_MIN_TEXT_OVERLAP_RATIO;
 }
 
+function areDuplicateTextLayers(firstRect: Rect, secondRect: Rect): boolean {
+  const smallerArea = Math.min(rectArea(firstRect), rectArea(secondRect));
+  if (smallerArea <= 0) return false;
+  return overlapArea(firstRect, secondRect) / smallerArea >= 0.85;
+}
+
 /**
  * Removes duplicated card text when a filled shape renders `shape.text` and a
  * separate centered TextElement for the same label. Keeping the TextElement
@@ -4146,10 +4152,41 @@ export function repairCardTextOverlayLayout<T extends SlideLayoutElement>(
   };
 
   let next: T[] | null = null;
+  const duplicateTextIndexes = new Set<number>();
 
   elements.forEach((element, shapeIndex) => {
     const shapeRect = rectFromElement(element);
     if (!shapeRect || !isTextOverlayShape(element, shapeRect, options)) return;
+
+    const overlayTexts = elements
+      .map((candidate, candidateIndex) => {
+        if (candidate.type !== 'text') return null;
+        const rect = rectFromElement(candidate);
+        if (!rect || !isContainedOverlayText(shapeRect, rect)) return null;
+        return { candidate, candidateIndex, rect };
+      })
+      .filter((candidate): candidate is NonNullable<typeof candidate> => !!candidate);
+
+    overlayTexts.forEach((first, firstIndex) => {
+      if (duplicateTextIndexes.has(first.candidateIndex)) return;
+
+      for (let index = firstIndex + 1; index < overlayTexts.length; index += 1) {
+        const second = overlayTexts[index];
+        if (duplicateTextIndexes.has(second.candidateIndex)) continue;
+        if (!areDuplicateTextLayers(first.rect, second.rect)) continue;
+
+        const firstText = stripHtmlToText(getElementContent(first.candidate));
+        const secondText = stripHtmlToText(getElementContent(second.candidate));
+        if (!looksLikeDuplicateCardText(firstText, secondText)) continue;
+
+        const firstLength = visualTextLength(getComparableText(firstText));
+        const secondLength = visualTextLength(getComparableText(secondText));
+        duplicateTextIndexes.add(
+          secondLength > firstLength ? first.candidateIndex : second.candidateIndex,
+        );
+        break;
+      }
+    });
 
     const shapeText = stripHtmlToText(getShapeTextContent(element));
     if (!shapeText) return;
@@ -4172,7 +4209,10 @@ export function repairCardTextOverlayLayout<T extends SlideLayoutElement>(
     next[shapeIndex] = updated;
   });
 
-  return next ?? (elements as T[]);
+  const repaired = next ?? (elements as T[]);
+  return duplicateTextIndexes.size > 0
+    ? repaired.filter((_, index) => !duplicateTextIndexes.has(index))
+    : repaired;
 }
 
 function isShortLabelBox(element: SlideLayoutElement, rect: Rect): boolean {
@@ -4271,6 +4311,13 @@ export function repairShortLabelBoxAlignment<T extends SlideLayoutElement>(
     const shapeRect = rectFromElement(shape);
     if (!shapeRect || shape.type !== 'shape' || !isShortLabelBox(shape, shapeRect)) return;
 
+    const overlayTextCount = elements.filter((candidate, candidateIndex) => {
+      if (candidateIndex === shapeIndex || candidate.type !== 'text') return false;
+      const candidateRect = rectFromElement(candidate);
+      return !!candidateRect && isContainedOverlayText(shapeRect, candidateRect);
+    }).length;
+    if (overlayTextCount > 1) return;
+
     elements.forEach((textElement, textIndex) => {
       if (textIndex === shapeIndex || textElement.type !== 'text') return;
       const textRect = rectFromElement(textElement);
@@ -4294,6 +4341,13 @@ export function repairShortLabelBoxAlignment<T extends SlideLayoutElement>(
 
     const backingShape = findShortLabelBackingShape(elements, textIndex, textRect, options);
     if (!backingShape) return;
+
+    const overlayTextCount = elements.filter((candidate, candidateIndex) => {
+      if (candidateIndex === backingShape.index || candidate.type !== 'text') return false;
+      const candidateRect = rectFromElement(candidate);
+      return !!candidateRect && isContainedOverlayText(backingShape.rect, candidateRect);
+    }).length;
+    if (overlayTextCount > 1) return;
 
     next ??= elements.map((item) => ({ ...item }));
     const html = getElementContent(next[textIndex]);

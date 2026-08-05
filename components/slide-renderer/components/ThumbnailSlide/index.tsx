@@ -7,7 +7,7 @@ import { ThumbnailElement } from './ThumbnailElement';
 
 interface ThumbnailSlideProps {
   /** Slide data */
-  readonly slide: Slide;
+  readonly slide?: Slide | null;
   /** Thumbnail width */
   readonly size: number;
   /** Viewport width base (default 1000px) */
@@ -36,16 +36,16 @@ export function ThumbnailSlide({
   const orderedElements = useMemo(
     () =>
       repairGeometryDiagramLayering(
-        repairSlideElementLayout(slide.elements, {
+        repairSlideElementLayout(slide?.elements ?? [], {
           canvasWidth: viewportSize,
           canvasHeight: viewportSize * viewportRatio,
         }),
       ),
-    [slide.elements, viewportRatio, viewportSize],
+    [slide?.elements, viewportRatio, viewportSize],
   );
 
   // Get background style
-  const { backgroundStyle } = useSlideBackgroundStyle(slide.background);
+  const { backgroundStyle } = useSlideBackgroundStyle(slide?.background);
 
   if (!visible) {
     return (

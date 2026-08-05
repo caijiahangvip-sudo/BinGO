@@ -1,0 +1,13 @@
+ingress:
+  - hostname: bingo.example.com
+    path: /collaboration*
+    service: http://sync:4101
+  - hostname: bingo.example.com
+    path: /v1/*
+    service: http://sync:4100
+  - hostname: bingo.example.com
+    path: /health
+    service: http://sync:4100
+  - hostname: bingo.example.com
+    service: http://host.docker.internal:4000
+  - service: http_status:404

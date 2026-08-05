@@ -213,7 +213,7 @@ export async function initializeCrdtProvider(
   };
 
   // Mark the connection active before the async provider import. React StrictMode,
-  // HMR, and whiteboard/tour remounts can call this twice in the same tick.
+  // HMR, and whiteboard remounts can call this twice in the same tick.
   setActiveConnection(connection);
 
   if (typeof window !== 'undefined' && (options.provider ?? DEFAULT_CRDT_PROVIDER) === 'webrtc') {

@@ -21,7 +21,7 @@ import type { VectorProviderId } from '@/lib/vector/types';
 import { WEB_SEARCH_PROVIDERS } from '@/lib/web-search/constants';
 import type { WebSearchProviderId } from '@/lib/web-search/types';
 import { createLogger } from '@/lib/logger';
-import { validateProvider, validateModel } from '@/lib/store/settings-validation';
+import { validateProvider, validateModel, getEffectiveModels } from '@/lib/store/settings-validation';
 
 const log = createLogger('Settings');
 
@@ -1419,17 +1419,11 @@ export const useSettingsStore = create<SettingsState>()(
               for (const [pid, info] of Object.entries(data.providers)) {
                 const key = pid as ProviderId;
                 if (newProvidersConfig[key]) {
-                  const currentModels = newProvidersConfig[key].models;
-                  // When server specifies allowed models, filter the models list
-                  const filteredModels = info.models?.length
-                    ? currentModels.filter((m) => info.models!.includes(m.id))
-                    : currentModels;
                   newProvidersConfig[key] = {
                     ...newProvidersConfig[key],
                     isServerConfigured: true,
                     serverModels: info.models,
                     serverBaseUrl: info.baseUrl,
-                    models: filteredModels,
                   };
                 }
               }
@@ -1453,16 +1447,11 @@ export const useSettingsStore = create<SettingsState>()(
                 if (!isLightweightProviderAllowed(pid)) continue;
                 const key = pid as ProviderId;
                 if (newLightweightProvidersConfig[key]) {
-                  const currentModels = newLightweightProvidersConfig[key].models;
-                  const filteredModels = info.models?.length
-                    ? currentModels.filter((m) => info.models!.includes(m.id))
-                    : currentModels;
                   newLightweightProvidersConfig[key] = {
                     ...newLightweightProvidersConfig[key],
                     isServerConfigured: true,
                     serverModels: info.models,
                     serverBaseUrl: info.baseUrl,
-                    models: filteredModels,
                   };
                 }
               }
@@ -1723,15 +1712,16 @@ export const useSettingsStore = create<SettingsState>()(
               const validLLMModel = validLLMProvider
                 ? validateModel(
                     state.modelId,
-                    newProvidersConfig[validLLMProvider as ProviderId]?.models ?? [],
+                    getEffectiveModels(newProvidersConfig[validLLMProvider as ProviderId]),
                   )
                 : '';
               const validLightweightModel = validLightweightProvider
                 ? validateModel(
                     state.lightweightModelId ||
                       (validLightweightProvider === validLLMProvider ? validLLMModel : ''),
-                    newLightweightProvidersConfig[validLightweightProvider as ProviderId]?.models ??
-                      [],
+                    getEffectiveModels(
+                      newLightweightProvidersConfig[validLightweightProvider as ProviderId],
+                    ),
                   )
                 : '';
 
@@ -1816,11 +1806,12 @@ export const useSettingsStore = create<SettingsState>()(
               if (!state.providerId && !state.modelId) {
                 for (const [pid, cfg] of Object.entries(newProvidersConfig)) {
                   if (cfg.isServerConfigured) {
-                    // Prefer server-restricted models, fall back to built-in list
-                    const serverModels = cfg.serverModels;
-                    const modelId = serverModels?.length
-                      ? serverModels[0]
-                      : PROVIDERS[pid as ProviderId]?.models[0]?.id;
+                    // Pick the first server-allowed model the user still has saved;
+                    // fall back to the server's first allowed id when the saved
+                    // list is empty (e.g. first run with no built-in defaults).
+                    const effectiveModels = getEffectiveModels(cfg);
+                    const modelId =
+                      effectiveModels[0]?.id ?? cfg.serverModels?.[0] ?? undefined;
                     if (modelId) {
                       autoProviderId = pid as ProviderId;
                       autoModelId = modelId;

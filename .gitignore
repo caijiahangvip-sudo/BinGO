@@ -6,6 +6,7 @@ CLAUDE.local.md
 
 # dependencies
 /node_modules
+**/node_modules/
 /openclaw/node_modules
 /openclaw/package-lock.json
 /.pnp

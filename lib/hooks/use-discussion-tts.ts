@@ -12,6 +12,7 @@ import { getAudioMimeType } from '@/lib/audio/mime';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { TTSProviderId } from '@/lib/audio/types';
 import type { AudioIndicatorState } from '@/components/roundtable/audio-indicator';
+import { resolveRuntimeTtsProvider } from '@/lib/runtime/audio-routing';
 
 interface DiscussionTTSOptions {
   enabled: boolean;
@@ -228,7 +229,10 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
 
       const { providerId, modelId, voiceId } = resolveVoiceForAgent(agentId);
       const providerConfig = ttsProvidersConfig[providerId];
-      const compatibleProviderId = providerConfig?.compatibleProviderId || providerId;
+      const compatibleProviderId = resolveRuntimeTtsProvider(
+        providerId,
+        providerConfig?.compatibleProviderId || providerId,
+      );
       queueRef.current.push({
         messageId,
         partId,

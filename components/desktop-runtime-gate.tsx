@@ -2,10 +2,7 @@
 
 import { type ReactNode, useEffect, useState } from 'react';
 import { startSenseVoiceLifecycle } from '@/lib/desktop/sensevoice-lifecycle';
-
-function isTauriRuntime() {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-}
+import { getNativePlatformInfo, getRuntimePlatform, isTauriRuntime } from '@/lib/runtime/platform';
 
 export function DesktopRuntimeGate({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
@@ -16,6 +13,20 @@ export function DesktopRuntimeGate({ children }: { children: ReactNode }) {
     if (!isTauriRuntime()) {
       const timer = window.setTimeout(() => setReady(true), 0);
       return () => window.clearTimeout(timer);
+    }
+
+    if (getRuntimePlatform() === 'ipados') {
+      let disposed = false;
+      void getNativePlatformInfo()
+        .then((info) => {
+          if (!disposed && info?.platform === 'ipados') setReady(true);
+        })
+        .catch((reason) => {
+          if (!disposed) setError(`无法连接 iPadOS 原生运行时：${String(reason)}`);
+        });
+      return () => {
+        disposed = true;
+      };
     }
 
     const token = new URLSearchParams(window.location.hash.slice(1)).get('desktopToken');

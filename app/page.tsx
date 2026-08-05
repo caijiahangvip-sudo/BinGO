@@ -20,7 +20,6 @@ import {
   ChevronUp,
   BookOpen,
   ClipboardCheck,
-  Compass,
   LibraryBig,
   Loader2,
   Palette,
@@ -67,10 +66,10 @@ import { buildBookLessonGenerationSession } from '@/lib/utils/book-lesson-genera
 import type { BookLearningPlan } from '@/lib/types/book-learning';
 import type { Locale } from '@/lib/i18n';
 import { shouldUseOpenAIResponsesApi } from '@/lib/ai/openai-routing';
-import { useTourStore } from '@/lib/store/tour';
-import { trackEvent } from '@/lib/telemetry';
 import { COLOR_THEME_PRESETS } from '@/lib/theme/color-themes';
 import { getCurrentColorTheme } from '@/lib/theme/theme-runtime';
+import { getRuntimePlatform } from '@/lib/runtime/platform';
+import { parsePdfLocally, renderPdfCoverLocally } from '@/lib/runtime/local-documents';
 import {
   getBookPlanProgressView,
   type BookPlanProgressPhase,
@@ -162,6 +161,9 @@ function getBookPdfParseTimeoutMessage(locale: Locale): string {
 
 async function renderPdfCoverFromFile(file: File): Promise<string | undefined> {
   try {
+    if (getRuntimePlatform() === 'ipados') {
+      return await renderPdfCoverLocally(file);
+    }
     const formData = new FormData();
     formData.append(
       'pdf',
@@ -223,7 +225,6 @@ function HomePage() {
   const { t, locale } = useI18n();
   const { theme, setTheme, colorTheme, setColorTheme } = useTheme();
   const router = useRouter();
-  const startTour = useTourStore.use.startTour();
   const [form, setForm] = useState<FormState>(initialFormState);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<
@@ -356,20 +357,12 @@ function HomePage() {
       const pdfBlob = await loadPdfBlob(plan.pdfStorageKey);
       if (!pdfBlob) return;
 
-      const formData = new FormData();
-      formData.append(
-        'pdf',
+      const coverImage = await renderPdfCoverFromFile(
         new File([pdfBlob], plan.fileName || 'book.pdf', {
           type: pdfBlob.type || 'application/pdf',
         }),
       );
-
-      const response = await fetch('/api/pdf-cover', {
-        method: 'POST',
-        body: formData,
-      });
-      const result = (await response.json()) as PdfCoverApiResponse;
-      if (!response.ok || !result.success || !isInlineImageSrc(result.coverImage)) {
+      if (!isInlineImageSrc(coverImage)) {
         if (plan.coverImage && !isInlineImageSrc(plan.coverImage)) {
           const updatedPlan: BookLearningPlan = {
             ...plan,
@@ -387,7 +380,7 @@ function HomePage() {
 
       const updatedPlan: BookLearningPlan = {
         ...plan,
-        coverImage: result.coverImage,
+        coverImage,
         coverImageVersion: PDF_COVER_IMAGE_VERSION,
       };
       await saveBookLearningPlan(updatedPlan);
@@ -692,58 +685,56 @@ function HomePage() {
 
     try {
       const pdfStorageKey = await storePdfBlob(form.pdfFile);
-      const parseFormData = new FormData();
-      parseFormData.append('pdf', form.pdfFile);
-
-      const settings = useSettingsStore.getState();
-      parseFormData.append('providerId', settings.pdfProviderId);
-      const providerCfg = settings.pdfProvidersConfig?.[settings.pdfProviderId];
-      if (providerCfg?.apiKey?.trim()) {
-        parseFormData.append('apiKey', providerCfg.apiKey);
-      }
-      if (providerCfg?.baseUrl?.trim()) {
-        parseFormData.append('baseUrl', providerCfg.baseUrl);
-      }
-      parseFormData.append('mode', 'fast');
-      parseFormData.append('needsCover', 'false');
-      parseFormData.append('needsImages', 'false');
-      parseFormData.append('needsMiddleJson', 'false');
-      parseFormData.append('maxPages', String(BOOK_PDF_FAST_MAX_PAGES));
-
-      const parseAbortController = new AbortController();
-      const parseTimeout = window.setTimeout(() => {
-        parseAbortController.abort();
-      }, BOOK_PDF_PARSE_TIMEOUT_MS);
-      let parseResponse: Response;
-      try {
-        parseResponse = await fetch('/api/parse-pdf', {
-          method: 'POST',
-          body: parseFormData,
-          signal: parseAbortController.signal,
+      let parsedPdfData: NonNullable<ParsePdfApiResponse['data']>;
+      if (getRuntimePlatform() === 'ipados') {
+        parsedPdfData = await parsePdfLocally(form.pdfFile, {
+          maxPages: BOOK_PDF_FAST_MAX_PAGES,
         });
-      } catch (error) {
-        if (isAbortError(error)) {
-          throw new Error(getBookPdfParseTimeoutMessage(locale));
+      } else {
+        const parseFormData = new FormData();
+        parseFormData.append('pdf', form.pdfFile);
+        const settings = useSettingsStore.getState();
+        parseFormData.append('providerId', settings.pdfProviderId);
+        const providerCfg = settings.pdfProvidersConfig?.[settings.pdfProviderId];
+        if (providerCfg?.apiKey?.trim()) parseFormData.append('apiKey', providerCfg.apiKey);
+        if (providerCfg?.baseUrl?.trim()) parseFormData.append('baseUrl', providerCfg.baseUrl);
+        parseFormData.append('mode', 'fast');
+        parseFormData.append('needsCover', 'false');
+        parseFormData.append('needsImages', 'false');
+        parseFormData.append('needsMiddleJson', 'false');
+        parseFormData.append('maxPages', String(BOOK_PDF_FAST_MAX_PAGES));
+
+        const parseAbortController = new AbortController();
+        const parseTimeout = window.setTimeout(
+          () => parseAbortController.abort(),
+          BOOK_PDF_PARSE_TIMEOUT_MS,
+        );
+        let parseResponse: Response;
+        try {
+          parseResponse = await fetch('/api/parse-pdf', {
+            method: 'POST',
+            body: parseFormData,
+            signal: parseAbortController.signal,
+          });
+        } catch (error) {
+          if (isAbortError(error)) throw new Error(getBookPdfParseTimeoutMessage(locale));
+          throw error;
+        } finally {
+          window.clearTimeout(parseTimeout);
         }
-        throw error;
-      } finally {
-        window.clearTimeout(parseTimeout);
-      }
-      const parseResult = await readApiJson<ParsePdfApiResponse>(
-        parseResponse,
-        t('generation.pdfParseFailed'),
-      );
-
-      if (parseResponse.status === 504) {
-        throw new Error(getBookPdfParseTimeoutMessage(locale));
-      }
-
-      if (!parseResponse.ok || !parseResult.success || !parseResult.data?.text) {
-        throw new Error(parseResult.error || t('generation.pdfParseFailed'));
+        const parseResult = await readApiJson<ParsePdfApiResponse>(
+          parseResponse,
+          t('generation.pdfParseFailed'),
+        );
+        if (parseResponse.status === 504) throw new Error(getBookPdfParseTimeoutMessage(locale));
+        if (!parseResponse.ok || !parseResult.success || !parseResult.data?.text) {
+          throw new Error(parseResult.error || t('generation.pdfParseFailed'));
+        }
+        parsedPdfData = parseResult.data;
       }
 
       const coverImage =
-        (await renderPdfCoverFromFile(form.pdfFile)) ?? getInlineParsedCoverImage(parseResult.data);
+        (await renderPdfCoverFromFile(form.pdfFile)) ?? getInlineParsedCoverImage(parsedPdfData);
 
       setBookPlanPhase('planning');
       const planResponse = await fetch('/api/generate/book-plan', {
@@ -755,7 +746,7 @@ function HomePage() {
           pdfStorageKey,
           coverImage,
           coverImageVersion: coverImage ? PDF_COVER_IMAGE_VERSION : undefined,
-          pdfText: parseResult.data.text,
+          pdfText: parsedPdfData.text,
           language: form.language,
         }),
       });
@@ -919,25 +910,6 @@ function HomePage() {
     }
   };
 
-  const handleStartTourFromHome = () => {
-    const targetClassroom = classrooms[0];
-    if (!targetClassroom) {
-      toast.info(
-        locale === 'zh-CN'
-          ? '请先创建或打开一个课堂，导览会在课堂中演示完整 ICAP 流程。'
-          : 'Create or open a classroom first. The tour runs inside a classroom.',
-      );
-      return;
-    }
-
-    startTour();
-    trackEvent('icap_tour', {
-      type: 'tour_started_from_home',
-      classroomId: targetClassroom.id,
-    });
-    router.push(`/classroom/${targetClassroom.id}`);
-  };
-
   return (
     <div
       className="relative h-[100dvh] min-h-[100dvh] w-full overflow-hidden overscroll-none bg-background text-foreground"
@@ -1033,17 +1005,6 @@ function HomePage() {
       />
 
       <div className="fixed left-5 top-5 z-50 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={handleStartTourFromHome}
-          className="inline-flex h-9 items-center gap-2 rounded-full bg-white/78 px-3 text-sm font-medium text-cyan-700 shadow-[0_10px_28px_rgba(88,76,120,0.10)] ring-1 ring-cyan-100/80 backdrop-blur-xl transition-all hover:-translate-y-0.5 hover:bg-white/92 hover:text-cyan-900 dark:bg-slate-950/52 dark:text-cyan-200 dark:ring-cyan-400/20 dark:hover:bg-slate-900"
-          title={locale === 'zh-CN' ? '开启功能导览' : 'Start Feature Tour'}
-          aria-label={locale === 'zh-CN' ? '开启功能导览' : 'Start Feature Tour'}
-        >
-          <Compass className="size-4 text-cyan-500" />
-          <span>{locale === 'zh-CN' ? '开启功能导览' : 'Feature Tour'}</span>
-        </button>
-
         <button
           type="button"
           onClick={() => router.push('/homework')}
@@ -1318,7 +1279,9 @@ function HomePage() {
               />
 
               {/* Toolbar row */}
-              {(isCreatingBookPlan || bookPlanPhase === 'complete' || bookPlanPhase === 'error') && (
+              {(isCreatingBookPlan ||
+                bookPlanPhase === 'complete' ||
+                bookPlanPhase === 'error') && (
                 <div className="mx-4 mb-3 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-left">
                   <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
                     <span>{bookPlanProgressLabel}</span>

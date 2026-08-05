@@ -7,11 +7,13 @@ import {
   playBrowserTTSPreview,
 } from '@/lib/audio/browser-tts-preview';
 import { createAudioBlob } from '@/lib/audio/mime';
+import type { TTSProviderId } from '@/lib/audio/types';
+import { resolveRuntimeTtsProvider } from '@/lib/runtime/audio-routing';
 
 export interface TTSPreviewOptions {
   text: string;
-  providerId: string;
-  compatibleProviderId?: string;
+  providerId: TTSProviderId;
+  compatibleProviderId?: TTSProviderId;
   modelId?: string;
   voice: string;
   speed: number;
@@ -73,7 +75,10 @@ export function useTTSPreview() {
 
       setPreviewing(true);
       try {
-        const runtimeProviderId = options.compatibleProviderId || options.providerId;
+        const runtimeProviderId = resolveRuntimeTtsProvider(
+          options.providerId,
+          options.compatibleProviderId || options.providerId,
+        );
 
         if (runtimeProviderId === 'browser-native-tts') {
           if (typeof window === 'undefined' || !window.speechSynthesis) {
