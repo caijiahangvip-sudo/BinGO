@@ -636,15 +636,33 @@ export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
     supportedFormats: ['mp3', 'wav', 'pcm'],
   },
 
+  'melotts-tts': {
+    id: 'melotts-tts',
+    name: 'MeloTTS 中文（本地）',
+    requiresApiKey: false,
+    defaultBaseUrl: 'http://localhost:50004',
+    icon: '/logos/bailian.svg',
+    models: [{ id: 'melotts-zh', name: 'MeloTTS 中文' }],
+    defaultModelId: 'melotts-zh',
+    voices: [
+      {
+        id: 'ZH',
+        name: '中文默认音色',
+        language: 'zh-CN',
+        gender: 'neutral',
+      },
+    ],
+    supportedFormats: ['wav'],
+    speedRange: { min: 0.5, max: 2.0, default: 1.0 },
+  },
+
   'cosyvoice-tts': {
     id: 'cosyvoice-tts',
     name: 'CosyVoice',
     requiresApiKey: false,
     defaultBaseUrl: 'http://localhost:50000',
     icon: '/logos/bailian.svg',
-    models: [
-      { id: 'Fun-CosyVoice3-0.5B-2512_RL', name: 'Fun-CosyVoice3-0.5B-2512_RL' },
-    ],
+    models: [{ id: 'Fun-CosyVoice3-0.5B-2512_RL', name: 'Fun-CosyVoice3-0.5B-2512_RL' }],
     defaultModelId: 'Fun-CosyVoice3-0.5B-2512_RL',
     voices: [
       {
@@ -1065,14 +1083,7 @@ export const ASR_PROVIDERS: Record<ASRProviderId, ASRProviderConfig> = {
     icon: '/logos/bailian.svg',
     models: [{ id: 'iic/SenseVoiceSmall', name: 'SenseVoiceSmall' }],
     defaultModelId: 'iic/SenseVoiceSmall',
-    supportedLanguages: [
-      'auto',
-      'zh',
-      'yue',
-      'en',
-      'ja',
-      'ko',
-    ],
+    supportedLanguages: ['auto', 'zh', 'yue', 'en', 'ja', 'ko'],
     supportedFormats: ['mp3', 'wav', 'webm', 'm4a', 'flac', 'ogg', 'aac'],
   },
 
@@ -1167,6 +1178,7 @@ export const DEFAULT_TTS_VOICES: Record<TTSProviderId, string> = {
   'azure-tts': 'zh-CN-XiaoxiaoNeural',
   'glm-tts': 'tongtong',
   'qwen-tts': 'Cherry',
+  'melotts-tts': 'ZH',
   'cosyvoice-tts': 'zero_shot_prompt',
   'doubao-tts': 'zh_female_vv_uranus_bigtts',
   'elevenlabs-tts': 'EXAVITQu4vr4xnSDxMaL',
@@ -1179,6 +1191,7 @@ export const DEFAULT_TTS_MODELS: Record<TTSProviderId, string> = {
   'azure-tts': '',
   'glm-tts': 'glm-tts',
   'qwen-tts': 'qwen3-tts-flash',
+  'melotts-tts': 'melotts-zh',
   'cosyvoice-tts': 'Fun-CosyVoice3-0.5B-2512_RL',
   'doubao-tts': '',
   'elevenlabs-tts': 'eleven_multilingual_v2',

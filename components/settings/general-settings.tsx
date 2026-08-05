@@ -23,6 +23,7 @@ import { useSettingsStore } from '@/lib/store/settings';
 import { toast } from 'sonner';
 import { createLogger } from '@/lib/logger';
 import { LocalRuntimeDiagnostics } from './local-runtime-diagnostics';
+import { LocalModelAutoManager } from './local-model-auto-manager';
 import { DesktopUpdateSettings } from './desktop-update-settings';
 
 type DesktopInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -161,37 +162,40 @@ export function GeneralSettings() {
     }
   }, [copy.exportFailed, copy.exportSuccess]);
 
-  const handleExportProfile = useCallback(async (chooseFolder = false) => {
-    setExportingProfile(true);
-    try {
-      const blob = await exportUserLearningProfileJson();
-      const invoke = getDesktopInvoke();
-      let targetDirectory: string | null = null;
-      if (invoke) {
-        targetDirectory = chooseFolder
-          ? await invoke<string | null>('desktop_choose_directory')
-          : await invoke<string>('desktop_profile_directory');
-        if (!targetDirectory) return;
-        const targetPath = `${targetDirectory.replace(/[\\/]$/, '')}\\${USER_PROFILE_FILENAME}`;
-        const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
-        await invoke('desktop_save_profile', { path: targetPath, data: bytes });
-        toast.success(`${copy.exportProfileSuccess}: ${targetPath}`, {
-          action: {
-            label: copy.revealExport,
-            onClick: () => void invoke('desktop_reveal_file', { path: targetPath }),
-          },
-        });
-      } else {
-        downloadBlob(blob, USER_PROFILE_FILENAME);
-        toast.success(copy.exportProfileSuccess);
+  const handleExportProfile = useCallback(
+    async (chooseFolder = false) => {
+      setExportingProfile(true);
+      try {
+        const blob = await exportUserLearningProfileJson();
+        const invoke = getDesktopInvoke();
+        let targetDirectory: string | null = null;
+        if (invoke) {
+          targetDirectory = chooseFolder
+            ? await invoke<string | null>('desktop_choose_directory')
+            : await invoke<string>('desktop_profile_directory');
+          if (!targetDirectory) return;
+          const targetPath = `${targetDirectory.replace(/[\\/]$/, '')}\\${USER_PROFILE_FILENAME}`;
+          const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
+          await invoke('desktop_save_profile', { path: targetPath, data: bytes });
+          toast.success(`${copy.exportProfileSuccess}: ${targetPath}`, {
+            action: {
+              label: copy.revealExport,
+              onClick: () => void invoke('desktop_reveal_file', { path: targetPath }),
+            },
+          });
+        } else {
+          downloadBlob(blob, USER_PROFILE_FILENAME);
+          toast.success(copy.exportProfileSuccess);
+        }
+      } catch (error) {
+        log.error('Failed to export user profile:', error);
+        toast.error(copy.exportProfileFailed);
+      } finally {
+        setExportingProfile(false);
       }
-    } catch (error) {
-      log.error('Failed to export user profile:', error);
-      toast.error(copy.exportProfileFailed);
-    } finally {
-      setExportingProfile(false);
-    }
-  }, [copy.exportProfileFailed, copy.exportProfileSuccess, copy.revealExport]);
+    },
+    [copy.exportProfileFailed, copy.exportProfileSuccess, copy.revealExport],
+  );
 
   const handleImportFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
@@ -240,6 +244,7 @@ export function GeneralSettings() {
       />
 
       <LocalRuntimeDiagnostics chinese={locale === 'zh-CN'} />
+      <LocalModelAutoManager chinese={locale === 'zh-CN'} />
       <DesktopUpdateSettings />
 
       <div className="rounded-xl border border-border bg-card">

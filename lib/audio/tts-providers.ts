@@ -103,6 +103,8 @@ import {
   formatCosyVoicePromptText,
 } from './cosyvoice-clone';
 import { resolveEndpointUrl } from '@/lib/utils/api-url';
+import { specializedMultipart } from '@/lib/server/specialized-model-client';
+import { resolveSelectedSpecializedModel } from '@/lib/server/specialized-models';
 
 /**
  * Result of TTS generation
@@ -196,8 +198,16 @@ export async function generateTTS(
     case 'qwen-tts':
       return await generateQwenTTS(config, text);
 
-    case 'cosyvoice-tts':
-      return await generateCosyVoiceTTS(config, text);
+    case 'melotts-tts':
+      return await generateMeloTTS(config, text);
+
+    case 'cosyvoice-tts': {
+      const selected =
+        process.platform === 'win32' ? await resolveSelectedSpecializedModel('tts') : undefined;
+      return selected?.id === 'melotts-zh'
+        ? await generateMeloTTS(config, text)
+        : await generateCosyVoiceTTS(config, text);
+    }
 
     case 'minimax-tts':
       return await generateMiniMaxTTS(config, text);
@@ -214,6 +224,20 @@ export async function generateTTS(
     default:
       throw new Error(`Unsupported TTS provider: ${config.providerId}`);
   }
+}
+
+async function generateMeloTTS(config: TTSModelConfig, text: string): Promise<TTSGenerationResult> {
+  const formData = new FormData();
+  formData.set('text', text);
+  formData.set('speed', String(config.speed || 1));
+  const response = await specializedMultipart('tts', formData, 'melotts-zh');
+  if (!response.ok) {
+    throw new Error(`MeloTTS local API error: ${await response.text()}`);
+  }
+  return {
+    audio: new Uint8Array(await response.arrayBuffer()),
+    format: 'wav',
+  };
 }
 
 /**

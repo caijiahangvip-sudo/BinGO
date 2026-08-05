@@ -15,6 +15,8 @@ import {
   MineruTaskCancelledError,
   MineruTaskTimedOutError,
 } from '@/lib/server/mineru-task-manager';
+import { specializedMultipart } from '@/lib/server/specialized-model-client';
+import { resolveSelectedSpecializedModel } from '@/lib/server/specialized-models';
 const log = createLogger('Parse PDF');
 
 export const runtime = 'nodejs';
@@ -193,6 +195,10 @@ function isEnabledEnv(value: string | undefined): boolean {
   return ['1', 'true', 'yes', 'on'].includes((value ?? '').trim().toLowerCase());
 }
 
+function shouldUseAutomaticSpecializedModels(): boolean {
+  return process.platform === 'win32' || isEnabledEnv(process.env.BINGO_ENABLE_SPECIALIZED_MODELS);
+}
+
 function parsePositiveIntegerEnv(value: string | undefined): number | undefined {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
@@ -213,6 +219,25 @@ function resolveParseOptions(formData: FormData): ParsePDFOptions {
     needsCover: parseBooleanFormValue(formData.get('needsCover')),
     needsMiddleJson: parseBooleanFormValue(formData.get('needsMiddleJson')),
     maxPages: parsePositiveIntegerFormValue(formData.get('maxPages')),
+  };
+}
+
+async function parseWithPPStructure(pdfFile: File): Promise<ParsedPdfContent> {
+  const formData = new FormData();
+  formData.set('file', pdfFile, pdfFile.name);
+  const response = await specializedMultipart('document', formData, 'pp-structure-v3');
+  const payload = (await response.json()) as { text?: string; results?: unknown; detail?: string };
+  if (!response.ok) {
+    throw new Error(payload.detail || `PP-StructureV3 failed (${response.status})`);
+  }
+  return {
+    text: payload.text?.trim() || '',
+    images: [],
+    metadata: {
+      pageCount: 1,
+      parser: 'pp-structure-v3',
+      structureResults: payload.results,
+    },
   };
 }
 
@@ -369,6 +394,33 @@ export async function POST(req: NextRequest) {
 
     if (!pdfFile) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'No PDF file provided');
+    }
+
+    const selectedDocumentModel = shouldUseAutomaticSpecializedModels()
+      ? await resolveSelectedSpecializedModel('document')
+      : undefined;
+    if (
+      selectedDocumentModel?.id === 'pp-structure-v3' &&
+      !rawParseOptions.needsImages &&
+      !rawParseOptions.needsCover &&
+      !rawParseOptions.needsMiddleJson
+    ) {
+      try {
+        const result = await parseWithPPStructure(pdfFile);
+        return apiSuccess({
+          data: {
+            ...result,
+            metadata: {
+              ...result.metadata,
+              fileName: pdfFile.name,
+              fileSize: pdfFile.size,
+              processingTime: Date.now() - requestStartedAt,
+            },
+          },
+        });
+      } catch (error) {
+        log.warn('PP-StructureV3 failed; falling back to MinerU:', error);
+      }
     }
 
     // Fall back to MinerU for old clients/localStorage values such as unpdf/mineru.

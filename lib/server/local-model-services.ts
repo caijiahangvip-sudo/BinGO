@@ -2,14 +2,22 @@ import { execFile, spawn } from 'child_process';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
-import { ensureOptionalChineseXinhuaData, getChineseXinhuaDataRoots } from '@/lib/server/chinese-xinhua-data';
+import {
+  ensureOptionalChineseXinhuaData,
+  getChineseXinhuaDataRoots,
+} from '@/lib/server/chinese-xinhua-data';
 import { promisify } from 'util';
 import { createLogger } from '@/lib/logger';
 
 const execFileAsync = promisify(execFile);
 const log = createLogger('LocalModelServices');
 
-export type LocalModelServiceId = 'cosyvoice' | 'sensevoice' | 'mineru' | 'embedding';
+export type LocalModelServiceId =
+  | 'cosyvoice'
+  | 'sensevoice'
+  | 'mineru'
+  | 'embedding'
+  | 'specialized';
 
 export interface ReleaseLocalModelServicesResult {
   services: LocalModelServiceId[];
@@ -85,6 +93,14 @@ const serviceDefinitions: Record<
     logName: 'embedding',
     wsl: true,
   },
+  specialized: {
+    defaultPort: 50004,
+    psScriptName: 'specialized-model-local-server.ps1',
+    cmdScriptName: 'specialized-model-local-server.cmd',
+    portEnvName: 'BINGO_SPECIALIZED_MODEL_PORT',
+    readyFile: 'dev\\SpecializedModels\\.venv\\Scripts\\python.exe',
+    logName: 'specialized-models',
+  },
 };
 
 const wslRuntimeDefinitions: Record<
@@ -116,6 +132,10 @@ const wslRuntimeDefinitions: Record<
     readyMarker: '.bingo-embedding-rocm-ready',
     modelId: 'BAAI/bge-base-zh-v1.5',
   },
+  specialized: {
+    serviceDir: 'SpecializedModels',
+    readyMarker: '.bingo-specialized-models-ready',
+  },
 };
 
 const LOCAL_MODEL_START_PROMISES_KEY = Symbol.for('bingo.localModelService.startPromises');
@@ -132,7 +152,7 @@ let wslIpAddressCache: { expiresAt: number; addresses: string[] } | undefined;
 
 function normalizeServices(services: LocalModelServiceId[]): LocalModelServiceId[] {
   return [...new Set(services)].filter((service): service is LocalModelServiceId =>
-    ['cosyvoice', 'sensevoice', 'mineru', 'embedding'].includes(service),
+    ['cosyvoice', 'sensevoice', 'mineru', 'embedding', 'specialized'].includes(service),
   );
 }
 
@@ -377,6 +397,10 @@ const unixReleaseMarkers: Record<
   embedding: {
     commandMarkers: ['chinese_xinhua_embedding_server', 'ChineseXinhuaEmbedding'],
     portMarkers: ['--port 50003', '--port=50003', 'BINGO_EMBEDDING_PORT=50003'],
+  },
+  specialized: {
+    commandMarkers: ['specialized_model_server', 'SpecializedModels'],
+    portMarkers: ['--port 50004', '--port=50004', 'BINGO_SPECIALIZED_MODEL_PORT=50004'],
   },
 };
 
@@ -648,6 +672,12 @@ function buildWslNativeStartCommand(service: LocalModelServiceId, port: number):
       );
       break;
     }
+    case 'specialized':
+      lines.push(
+        `export BINGO_SPECIALIZED_MODEL_PORT=${port}`,
+        `exec "$VENV_PY" -m uvicorn scripts.specialized_model_server:app --host 127.0.0.1 --port ${port}`,
+      );
+      break;
   }
 
   return `${lines.join('\n')}\n`;

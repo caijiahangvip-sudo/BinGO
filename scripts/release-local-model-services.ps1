@@ -1,6 +1,6 @@
 param(
-  [ValidateSet("cosyvoice", "sensevoice", "mineru", "embedding")]
-  [string[]]$Service = @("cosyvoice", "sensevoice", "mineru", "embedding"),
+  [ValidateSet("cosyvoice", "sensevoice", "mineru", "embedding", "specialized")]
+  [string[]]$Service = @("cosyvoice", "sensevoice", "mineru", "embedding", "specialized"),
   [switch]$DryRun
 )
 
@@ -56,6 +56,17 @@ $serviceDefinitions = @{
       "dev\chinesexinhuaembedding"
     )
     ScriptMarkers = @("chinese-xinhua-embedding-wsl-server.ps1", "chinese_xinhua_embedding_server.py")
+  }
+  specialized = @{
+    PortMarkers = @("--port 50004", "--port=50004")
+    ServiceMarkers = @("-service specialized", "-service=specialized", "service='specialized'", 'service="specialized"')
+    PathMarkers = @(
+      "scripts\specialized-model-local-server.cmd",
+      "scripts\specialized-model-local-server.ps1",
+      "scripts\specialized_model_server.py",
+      "dev\specializedmodels"
+    )
+    ScriptMarkers = @("specialized-model-local-server.cmd", "specialized-model-local-server.ps1", "specialized_model_server.py")
   }
 }
 

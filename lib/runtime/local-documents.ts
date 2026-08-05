@@ -1,6 +1,8 @@
 'use client';
 
 import type { ParsedPdfContent } from '@/lib/types/pdf';
+import { runtimeFetch } from '@/lib/runtime/api-client';
+import { getRuntimePlatform } from '@/lib/runtime/platform';
 
 function canvasToDataUrl(canvas: HTMLCanvasElement, quality = 0.86): string {
   return canvas.toDataURL('image/jpeg', quality);
@@ -101,6 +103,25 @@ export async function parsePdfLocally(
 }
 
 export async function recognizeImageTextLocally(image: string | Blob): Promise<string> {
+  if (getRuntimePlatform() === 'desktop') {
+    try {
+      const blob = typeof image === 'string' ? await (await fetch(image)).blob() : image;
+      const formData = new FormData();
+      formData.set('file', blob, 'image.png');
+      const response = await runtimeFetch('/api/local-services/specialized/ocr', {
+        method: 'POST',
+        body: formData,
+      });
+      const result = (await response.json()) as {
+        text?: string;
+        error?: string;
+        details?: string;
+      };
+      const text = result.text?.replace(/\r\n/g, '\n').trim();
+      if (response.ok && text) return text;
+    } catch {}
+  }
+
   const { createWorker } = await import('tesseract.js');
   const worker = await createWorker(['chi_sim', 'eng'], 1, {
     workerPath: '/tesseract/worker.min.js',

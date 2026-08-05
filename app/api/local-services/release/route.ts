@@ -8,7 +8,13 @@ import { apiError, apiSuccess } from '@/lib/server/api-response';
 export const runtime = 'nodejs';
 
 function isLocalModelServiceId(value: unknown): value is LocalModelServiceId {
-  return value === 'cosyvoice' || value === 'sensevoice' || value === 'mineru' || value === 'embedding';
+  return (
+    value === 'cosyvoice' ||
+    value === 'sensevoice' ||
+    value === 'mineru' ||
+    value === 'embedding' ||
+    value === 'specialized'
+  );
 }
 
 export async function POST(req: NextRequest) {

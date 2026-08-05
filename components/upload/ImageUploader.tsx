@@ -338,9 +338,11 @@ export function ImageUploader({ className, onGenerated }: ImageUploaderProps) {
         const data = (await response.json()) as QuestionVisionResponse;
 
         if (!response.ok || !data.success) {
-          throw new Error(data.success ? '视觉模型处理失败' : data.error);
+          const recognizedText = await recognizeImageTextLocally(imageDataUrl);
+          normalized = buildLocalOcrConfig(recognizedText, file.name);
+        } else {
+          normalized = normalizeConfigForStore(data.config);
         }
-        normalized = normalizeConfigForStore(data.config);
       }
       setMarkdownText(normalized.extractedMarkdown);
       setConfigText(JSON.stringify(normalized, null, 2));

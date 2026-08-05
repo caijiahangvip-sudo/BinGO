@@ -7,6 +7,12 @@ import { resolveVectorApiKey, resolveVectorBaseUrl } from '@/lib/server/provider
 import { VECTOR_PROVIDERS, normalizeVectorProviderId } from '@/lib/vector/constants';
 import type { VectorProviderId } from '@/lib/vector/types';
 import { resolveEndpointUrl } from '@/lib/utils/api-url';
+import {
+  ensureLocalModelServiceRunning,
+  resolveReachableLocalModelServiceBaseUrl,
+} from '@/lib/server/local-model-services';
+import { specializedJson } from '@/lib/server/specialized-model-client';
+import { resolveSelectedSpecializedModel } from '@/lib/server/specialized-models';
 
 const log = createLogger('StudentEvidenceVectorStore');
 
@@ -16,7 +22,7 @@ const DEFAULT_MODEL_ID = 'text-embedding-3-small';
 const FALLBACK_MODEL_ID = 'local-hash-embedding-v1';
 const FALLBACK_DIMENSIONS = 256;
 const TOP_K_DEFAULT = 3;
-const VECTOR_OPERATION_TIMEOUT_MS = 5_000;
+const VECTOR_OPERATION_TIMEOUT_MS = process.platform === 'win32' ? 30 * 60 * 1000 : 5_000;
 
 class VectorOperationTimeoutError extends Error {
   constructor(operation: string, timeoutMs: number) {
@@ -266,6 +272,46 @@ async function createRemoteEmbedding(
   }
 }
 
+async function createAutomaticLocalEmbedding(text: string): Promise<{
+  embedding: number[];
+  embeddingModel: string;
+  providerId: string;
+} | null> {
+  if (process.platform !== 'win32') return null;
+  const selected = await resolveSelectedSpecializedModel('embedding');
+  if (selected?.id === 'bge-small-zh-v1.5') {
+    const response = await specializedJson('embeddings', { texts: [text] }, 'bge-small-zh-v1.5');
+    if (!response.ok) throw new Error(await response.text());
+    const payload = (await response.json()) as { data?: number[][]; model?: string };
+    const embedding = payload.data?.[0];
+    if (!embedding) throw new Error('BGE Small did not return an embedding');
+    return {
+      embedding,
+      embeddingModel: payload.model || 'BAAI/bge-small-zh-v1.5',
+      providerId: 'bingo-local-bge-small',
+    };
+  }
+  if (selected?.id === 'bge-base-zh-v1.5') {
+    const service = await ensureLocalModelServiceRunning('embedding');
+    const baseUrl = await resolveReachableLocalModelServiceBaseUrl('embedding', service.baseUrl);
+    const response = await fetch(`${baseUrl}/embed`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ texts: [text] }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const payload = (await response.json()) as { vectors?: number[][]; model?: string };
+    const embedding = payload.vectors?.[0];
+    if (!embedding) throw new Error('BGE Base did not return an embedding');
+    return {
+      embedding,
+      embeddingModel: payload.model || 'BAAI/bge-base-zh-v1.5',
+      providerId: 'bingo-local-bge-base',
+    };
+  }
+  return null;
+}
+
 function hashToken(token: string): number {
   let hash = 2166136261;
   for (let index = 0; index < token.length; index++) {
@@ -302,6 +348,12 @@ async function createEmbedding(
   embeddingModel: string;
   providerId: string;
 }> {
+  try {
+    const local = await createAutomaticLocalEmbedding(text);
+    if (local) return { ...local, embedding: normalizeVector(local.embedding) };
+  } catch (error) {
+    log.warn('Automatic local embedding failed; trying configured provider:', error);
+  }
   const remote = await createRemoteEmbedding(text, signal);
   if (remote) {
     return {
