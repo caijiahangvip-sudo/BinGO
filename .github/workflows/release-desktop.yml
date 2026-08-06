@@ -57,9 +57,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
-          releaseName: 'BinGO Windows 5.0'
+          releaseName: 'BinGO Windows __VERSION__'
           releaseBody: |
-            BinGO Windows 5.0 desktop installer.
+            BinGO Windows __VERSION__ desktop installer.
 
             This release includes the Windows native desktop client and automatic on-demand management for lightweight OCR, document parsing, TTS, and embedding models.
           releaseDraft: true

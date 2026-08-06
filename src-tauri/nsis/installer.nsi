@@ -450,10 +450,10 @@ Function un.PageConfirm
   ${NSD_CreateLabel} 0 40u 95u 12u "卸载位置："
   Pop $0
 
-  ${NSD_CreateText} 100u 38u -155u 14u "$INSTDIR"
+  ${NSD_CreateText} 100u 37u -190u 16u "$INSTDIR"
   Pop $UninstallDirField
 
-  ${NSD_CreateButton} -145u 37u 135u 16u "浏览..."
+  ${NSD_CreateButton} -80u 37u 70u 16u "浏览..."
   Pop $BrowseBtn
   ${NSD_OnClick} $BrowseBtn un.OnBrowse
 
