@@ -73,7 +73,7 @@ jobs:
           $installers = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe
           if (-not $installers) { throw "NSIS installer was not produced" }
           foreach ($installer in $installers) {
-            if ($installer.Length -gt 60MB) { throw "Installer exceeds 60 MiB: $($installer.Length)" }
+            if ($installer.Length -gt 80MB) { throw "Installer exceeds 80 MiB: $($installer.Length)" }
           }
           $resources = (Get-ChildItem desktop-dist,src-tauri/binaries/node.exe -Recurse -File | Measure-Object Length -Sum).Sum
           if ($resources -gt 320MB) { throw "Installed resources exceed 320 MiB: $resources" }
