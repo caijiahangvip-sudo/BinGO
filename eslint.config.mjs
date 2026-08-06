@@ -19,6 +19,7 @@ const eslintConfig = defineConfig([
     'artifacts/**',
     'reports/**',
     'evidence/**',
+    'public/tesseract/**',
     'src-tauri/target/**',
     '.cache/**',
     '.hf-cache/**',

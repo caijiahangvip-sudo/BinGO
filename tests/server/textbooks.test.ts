@@ -65,9 +65,11 @@ const TAGS_FIXTURE = {
   hierarchies: [
     {
       children: [
-        { tag_id: 'root-1', tag_name: '电子教材', hierarchies: [
-          { children: [{ tag_id: 'stage-1', tag_name: '小学', hierarchies: [] }] },
-        ] },
+        {
+          tag_id: 'root-1',
+          tag_name: '电子教材',
+          hierarchies: [{ children: [{ tag_id: 'stage-1', tag_name: '小学', hierarchies: [] }] }],
+        },
       ],
     },
   ],
@@ -228,7 +230,7 @@ describe('getTextbookCatalog', () => {
   });
 
   it('classifies transport failures as NETWORK_ERROR', async () => {
-    const { proxyFetch } = (await import('@/lib/server/proxy-fetch')) as {
+    const { proxyFetch } = (await import('@/lib/server/proxy-fetch')) as unknown as {
       proxyFetch: { mockRejectedValueOnce: (err: Error) => void };
     };
     proxyFetch.mockRejectedValueOnce(new Error('fetch failed'));
@@ -337,7 +339,7 @@ describe('downloadTextbookPdf', () => {
   });
 
   it('classifies 401 and 403 resource responses as AUTH_REQUIRED', async () => {
-    const { proxyFetch } = (await import('@/lib/server/proxy-fetch')) as {
+    const { proxyFetch } = (await import('@/lib/server/proxy-fetch')) as unknown as {
       proxyFetch: {
         mockImplementation: (fn: (url: string) => Promise<Response>) => void;
       };

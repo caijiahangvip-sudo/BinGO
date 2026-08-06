@@ -9,6 +9,7 @@ const { mockState } = vi.hoisted(() => ({
         apiKey: '',
         baseUrl: '',
         models: [{ id: 'gpt-4o', name: 'GPT-4o' }],
+        serverModels: undefined as string[] | undefined,
         requiresApiKey: true,
         isServerConfigured: false,
       },
@@ -20,6 +21,7 @@ const { mockState } = vi.hoisted(() => ({
         apiKey: '',
         baseUrl: '',
         models: [{ id: 'gpt-4o-mini', name: 'GPT-4o Mini' }],
+        serverModels: undefined as string[] | undefined,
         requiresApiKey: true,
         isServerConfigured: true,
       },
@@ -46,7 +48,9 @@ describe('resolveChatModelConfig', () => {
     mockState.lightweightModelId = 'gpt-4o-mini';
     mockState.lightweightProvidersConfig.openai.isServerConfigured = true;
     mockState.lightweightProvidersConfig.openai.serverModels = undefined;
-    mockState.lightweightProvidersConfig.openai.models = [{ id: 'gpt-4o-mini', name: 'GPT-4o Mini' }];
+    mockState.lightweightProvidersConfig.openai.models = [
+      { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
+    ];
   });
 
   it('falls back to lightweight chat model when the main model is unusable', () => {
