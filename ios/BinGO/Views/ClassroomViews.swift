@@ -109,7 +109,7 @@ private struct CreateClassroomView: View {
 
 struct ClassroomDetailView: View {
     @Bindable var classroom: ClassroomRecord
-    @State private var selectedSceneIndex = 0
+    @State private var selectedSceneIndex: Int? = 0
     @State private var speech = SpeechSynthesizer()
     @State private var showingChat = false
 
@@ -150,7 +150,8 @@ struct ClassroomDetailView: View {
     }
 
     private var currentScene: SceneDTO? {
-        classroom.scenes.indices.contains(selectedSceneIndex) ? classroom.scenes[selectedSceneIndex] : nil
+        guard let selectedSceneIndex, classroom.scenes.indices.contains(selectedSceneIndex) else { return nil }
+        return classroom.scenes[selectedSceneIndex]
     }
 }
 

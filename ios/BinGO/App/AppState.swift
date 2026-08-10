@@ -13,7 +13,10 @@ final class AppState {
     var selectedSection: AppSection? = .home
     var connectivity: Connectivity = .checking
     var configuration = APIConfiguration.load()
+    var processingPreferences = ProcessingPreferences.load()
+    var deviceProfile = DevicePerformanceProfile.current
     var activeError: String?
+    var syncSession = SyncSessionStore()
 
     private(set) var apiClient: APIClient
 
@@ -22,7 +25,9 @@ final class AppState {
     }
 
     func bootstrap() async {
-        await refreshConnection()
+        async let apiCheck: Void = refreshConnection()
+        async let syncCheck: Void = syncSession.bootstrap()
+        _ = await (apiCheck, syncCheck)
     }
 
     func applyConfiguration(_ value: APIConfiguration) async {
@@ -33,6 +38,7 @@ final class AppState {
     }
 
     func refreshConnection() async {
+        deviceProfile = .current
         guard configuration.baseURL != nil else {
             connectivity = .offline(message: "尚未配置 BinGO API；本地功能仍可使用。")
             return
@@ -45,6 +51,25 @@ final class AppState {
             connectivity = .offline(message: error.localizedDescription)
         }
     }
+
+    func processingMode(for capability: ProcessingCapability) -> ProcessingDecision {
+        ProcessingRouter.decision(
+            for: capability,
+            preferences: processingPreferences,
+            profile: deviceProfile,
+            cloudAvailable: isCloudAvailable
+        )
+    }
+
+    func updateProcessingMode(_ mode: ProcessingMode, for capability: ProcessingCapability) {
+        processingPreferences.set(mode, for: capability)
+        processingPreferences.save()
+    }
+
+    var isCloudAvailable: Bool {
+        if case .online = connectivity { return true }
+        return false
+    }
 }
 
 enum AppSection: String, CaseIterable, Identifiable {
@@ -54,6 +79,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case documents
     case homework
     case books
+    case learningTools
     case settings
 
     var id: String { rawValue }
@@ -66,6 +92,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .documents: "PDF 与 OCR"
         case .homework: "作业"
         case .books: "书本学习"
+        case .learningTools: "学习工具"
         case .settings: "设置"
         }
     }
@@ -78,6 +105,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .documents: "doc.viewfinder"
         case .homework: "checklist"
         case .books: "books.vertical"
+        case .learningTools: "brain.head.profile"
         case .settings: "gearshape"
         }
     }

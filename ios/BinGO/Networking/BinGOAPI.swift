@@ -90,4 +90,32 @@ actor BinGOAPI {
     func webSearch(query: String, pdfText: String? = nil) async throws -> WebSearchResponse {
         try await client.post("/api/web-search", body: WebSearchRequest(query: query, pdfText: pdfText))
     }
+
+    func gradeQuiz(request: QuizGradeRequest) async throws -> QuizGradeResponse {
+        try await client.post("/api/quiz-grade", body: request)
+    }
+
+    func cloudOCR(file: UploadFile) async throws -> String {
+        let response: CloudTextResponse = try await client.upload(
+            "/api/local-services/specialized/ocr",
+            fields: [:],
+            file: file
+        )
+        guard let text = response.resolvedText else {
+            throw APIError.decoding("云端 OCR 返回了空结果")
+        }
+        return text
+    }
+
+    func cloudDocumentParsing(file: UploadFile) async throws -> String {
+        let response: CloudTextResponse = try await client.upload(
+            "/api/local-services/specialized/document",
+            fields: [:],
+            file: file
+        )
+        guard let text = response.resolvedText else {
+            throw APIError.decoding("云端文档解析返回了空结果")
+        }
+        return text
+    }
 }

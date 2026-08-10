@@ -1,7 +1,10 @@
 import SwiftUI
+import SwiftData
 
 struct RootView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         @Bindable var appState = appState
@@ -20,6 +23,7 @@ struct RootView: View {
                 case .documents: DocumentsView()
                 case .homework: HomeworkListView()
                 case .books: BookLearningView()
+                case .learningTools: LearningToolsView()
                 case .settings: SettingsView()
                 }
             }
@@ -32,6 +36,20 @@ struct RootView: View {
             Button("好") { appState.activeError = nil }
         } message: {
             Text(appState.activeError ?? "")
+        }
+        .task(id: appState.syncSession.account?.id) {
+            guard appState.syncSession.account != nil else { return }
+            while !Task.isCancelled {
+                try? await appState.syncSession.synchronize(modelContext: modelContext)
+                try? await Task.sleep(for: .seconds(300))
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, appState.syncSession.account != nil else { return }
+            Task {
+                try? await appState.syncSession.refreshSupportRequests()
+                try? await appState.syncSession.synchronize(modelContext: modelContext)
+            }
         }
     }
 }

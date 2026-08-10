@@ -12,9 +12,9 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 24) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("BinGO 原生课堂")
+                        Text("BinGO 学习工作台")
                             .font(.largeTitle.bold())
-                        Text("课堂、白板、PDF、OCR 与语音优先在 iPad 本地运行。")
+                        Text("与 Windows 版共享任务和云端能力，同时使用原生 iPad 文档、语音与手写体验。")
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -33,6 +33,39 @@ struct HomeView: View {
                     }
                     DashboardCard(title: "拍照 OCR", subtitle: "使用 Vision 中英文识别", icon: "viewfinder") {
                         appState.selectedSection = .documents
+                    }
+                    DashboardCard(title: "作业模式", subtitle: "拍照识题、解题与进度管理", icon: "checklist") {
+                        appState.selectedSection = .homework
+                    }
+                    DashboardCard(title: "书本学习", subtitle: "从教材生成分课学习计划", icon: "books.vertical") {
+                        appState.selectedSection = .books
+                    }
+                    DashboardCard(title: "学习工具", subtitle: "联网搜索、主观题批改与能力检测", icon: "brain.head.profile") {
+                        appState.selectedSection = .learningTools
+                    }
+                    DashboardCard(title: "处理设置", subtitle: "自动选择本地或云端能力", icon: "cpu") {
+                        appState.selectedSection = .settings
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("当前处理策略").font(.title2.bold())
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(ProcessingCapability.allCases) { capability in
+                            let decision = appState.processingMode(for: capability)
+                            HStack {
+                                Image(systemName: capability.systemImage).foregroundStyle(.blue)
+                                VStack(alignment: .leading) {
+                                    Text(capability.title).font(.headline)
+                                    Text(decision.mode == .cloud ? "云端" : "本地")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(decision.mode == .cloud ? .blue : .green)
+                                }
+                                Spacer()
+                            }
+                            .padding()
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                        }
                     }
                 }
 

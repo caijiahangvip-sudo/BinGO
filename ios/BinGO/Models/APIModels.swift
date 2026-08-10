@@ -240,6 +240,40 @@ struct WebSearchSource: Decodable, Sendable, Identifiable {
     var id: String { url }
 }
 
+struct QuizGradeRequest: Encodable, Sendable {
+    let question: String
+    let userAnswer: String
+    let points: Int
+    let commentPrompt: String?
+    let language: String
+}
+
+struct QuizGradeResponse: Decodable, Sendable {
+    let success: Bool
+    let score: Int
+    let comment: String
+}
+
+struct CloudTextResponse: Decodable, Sendable {
+    let success: Bool?
+    let text: String?
+    let markdown: String?
+    let content: String?
+    let result: CloudTextPayload?
+
+    var resolvedText: String? {
+        [text, markdown, content, result?.text, result?.markdown, result?.content]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty })
+    }
+}
+
+struct CloudTextPayload: Decodable, Sendable {
+    let text: String?
+    let markdown: String?
+    let content: String?
+}
+
 struct BookPlanRequest: Encodable, Sendable {
     let fileName: String
     let fileSize: Int

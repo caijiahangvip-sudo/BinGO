@@ -8,7 +8,8 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("BinGO API") {
+            ServerAndSyncView()
+            Section("AI 与处理 API") {
                 TextField("API 地址", text: $baseURL, prompt: Text("https://api.example.com"))
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
@@ -29,14 +30,16 @@ struct SettingsView: View {
                 }
             }
             Section("本地能力") {
-                Label("PDFKit 本地 PDF", systemImage: "doc.richtext")
-                Label("Vision 本地 OCR", systemImage: "viewfinder")
-                Label("Speech 本地语音识别", systemImage: "waveform")
-                Label("AVFoundation 本地朗读", systemImage: "speaker.wave.2")
-                Label("PencilKit 原生白板", systemImage: "pencil.and.scribble")
+                Label(appState.deviceProfile.summary, systemImage: "ipad.gen2")
+                ForEach(ProcessingCapability.allCases) { capability in
+                    ProcessingPreferenceRow(capability: capability)
+                }
+                Button("重新检测设备与连接", systemImage: "arrow.clockwise") {
+                    Task { await appState.refreshConnection() }
+                }
             }
             Section {
-                Text("此应用不加载 BinGO 网页。API 只用于 LLM、搜索、课堂生成和同步。")
+                Text("此应用不加载 BinGO 网页。同步账号与 AI API 配置彼此独立；AI 密钥只保存在本机 Keychain，不上传到同步服务器。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -52,5 +55,38 @@ struct SettingsView: View {
         isSaving = true
         defer { isSaving = false }
         await appState.applyConfiguration(APIConfiguration(baseURLString: baseURL, token: token))
+    }
+}
+
+private struct ProcessingPreferenceRow: View {
+    @Environment(AppState.self) private var appState
+    let capability: ProcessingCapability
+
+    var body: some View {
+        let decision = appState.processingMode(for: capability)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(capability.title, systemImage: capability.systemImage)
+                Spacer()
+                Picker("处理方式", selection: Binding(
+                    get: { appState.processingPreferences.mode(for: capability) },
+                    set: { appState.updateProcessingMode($0, for: capability) }
+                )) {
+                    ForEach(availableModes) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+            }
+            Text("当前：\(decision.mode == .cloud ? "云端" : "本地") · \(decision.reason)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 3)
+    }
+
+    private var availableModes: [ProcessingMode] {
+        capability == .languageModel ? [.cloud] : ProcessingMode.allCases
     }
 }
