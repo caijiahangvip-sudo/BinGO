@@ -96,3 +96,7 @@ next-env.d.ts
 /evidence
 /evidence.7z
 /public/fonts/custom
+
+# Windows teacher app build outputs
+teacher-windows/**/obj/
+teacher-windows/**/bin/

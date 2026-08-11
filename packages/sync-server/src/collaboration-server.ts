@@ -2,7 +2,7 @@ import { Server } from '@hocuspocus/server';
 import { Database } from '@hocuspocus/extension-database';
 import { config } from './config.js';
 import { pool } from './db.js';
-import { verifyAccessToken, type AccessClaims } from './auth.js';
+import { verifyActiveAccessToken, type AccessClaims } from './auth.js';
 
 interface CollaborationContext {
   account: AccessClaims;
@@ -45,7 +45,7 @@ export async function startCollaborationServer() {
       }),
     ],
     async onAuthenticate({ documentName, token, connectionConfig }) {
-      const account = verifyAccessToken(token);
+      const account = await verifyActiveAccessToken(token);
       const document = parseDocumentName(documentName);
       if (account.organizationId !== document.organizationId) throw new Error('Organization denied');
       if (account.role === 'student' && !['annotation', 'answer'].includes(document.kind)) {

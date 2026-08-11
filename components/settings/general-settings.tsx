@@ -14,7 +14,8 @@ import {
   AlertDialogFooter,
   AlertDialogCancel,
 } from '@/components/ui/alert-dialog';
-import { AlertTriangle, Database, Download, Loader2, Trash2, Upload } from 'lucide-react';
+import { AlertTriangle, BookOpen, Database, Download, Loader2, Trash2, Upload } from 'lucide-react';
+import { openOnboardingTour } from '@/components/onboarding/onboarding-tour';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { clearDatabase } from '@/lib/utils/database';
 import { exportLocalBackup, importLocalBackup } from '@/lib/utils/local-backup';
@@ -246,6 +247,32 @@ export function GeneralSettings() {
       <LocalRuntimeDiagnostics chinese={locale === 'zh-CN'} />
       <LocalModelAutoManager chinese={locale === 'zh-CN'} />
       <DesktopUpdateSettings />
+
+      <div className="rounded-xl border border-border bg-card">
+        <div className="p-4 space-y-4">
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded-md bg-primary/10 text-primary">
+              <BookOpen className="w-4 h-4" />
+            </div>
+            <h3 className="text-sm font-semibold">{locale === 'zh-CN' ? '帮助' : 'Help'}</h3>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium">
+                {locale === 'zh-CN' ? '新手教程' : 'Onboarding tour'}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                {locale === 'zh-CN'
+                  ? '重新查看 12 页新手引导，了解注册、加入班级、课堂、作业和同步的用法。'
+                  : 'Replay the 12-step tour covering sign-up, joining your class, classrooms, homework and sync.'}
+              </p>
+            </div>
+            <Button variant="outline" className="shrink-0" onClick={() => openOnboardingTour()}>
+              {locale === 'zh-CN' ? '查看教程' : 'Open tour'}
+            </Button>
+          </div>
+        </div>
+      </div>
 
       <div className="rounded-xl border border-border bg-card">
         <div className="p-4 space-y-4">

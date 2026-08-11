@@ -1,0 +1,29 @@
+{
+  "$schema": "../../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "BinGO 教师端",
+  "version": "1.0.0",
+  "identifier": "app.bingo.teacher.windows",
+  "build": {
+    "frontendDist": "../../packages/teacher-web/public"
+  },
+  "app": {
+    "windows": [{
+      "label": "main",
+      "title": "BinGO 教师端",
+      "width": 1280,
+      "height": 820,
+      "minWidth": 960,
+      "minHeight": 640,
+      "center": true,
+      "resizable": true
+    }],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' https://bingo.mido.site; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": ["../../src-tauri/icons/32x32.png", "../../src-tauri/icons/128x128.png", "../../src-tauri/icons/128x128@2x.png", "../../src-tauri/icons/icon.ico"]
+  }
+}

@@ -5,6 +5,7 @@ struct SettingsView: View {
     @State private var baseURL = ""
     @State private var token = ""
     @State private var isSaving = false
+    @State private var showingTutorial = false
 
     var body: some View {
         Form {
@@ -38,6 +39,11 @@ struct SettingsView: View {
                     Task { await appState.refreshConnection() }
                 }
             }
+            Section("帮助") {
+                Button("新手教程", systemImage: "book.pages") {
+                    showingTutorial = true
+                }
+            }
             Section {
                 Text("此应用不加载 BinGO 网页。同步账号与 AI API 配置彼此独立；AI 密钥只保存在本机 Keychain，不上传到同步服务器。")
                     .font(.footnote)
@@ -45,6 +51,9 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("设置")
+        .fullScreenCover(isPresented: $showingTutorial) {
+            OnboardingView { showingTutorial = false }
+        }
         .onAppear {
             baseURL = appState.configuration.baseURLString
             token = appState.configuration.token

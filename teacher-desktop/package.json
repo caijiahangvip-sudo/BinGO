@@ -1,0 +1,9 @@
+{
+  "name": "bingo-teacher-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tauri build --config src-tauri/tauri.conf.json",
+    "dev": "tauri dev --config src-tauri/tauri.conf.json"
+  }
+}

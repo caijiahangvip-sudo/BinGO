@@ -18,6 +18,7 @@ const SECRET_SCOPES: &[&str] = &[
   "pdf",
   "vector",
   "web-search",
+  "sync",
 ];
 
 struct ServerProcess {

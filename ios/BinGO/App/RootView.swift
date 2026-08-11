@@ -5,6 +5,7 @@ struct RootView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("bingo.hasSeenOnboarding") private var hasSeenOnboarding = false
 
     var body: some View {
         @Bindable var appState = appState
@@ -28,6 +29,7 @@ struct RootView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .id(appState.selectedSection)
         }
         .alert("BinGO", isPresented: Binding(
             get: { appState.activeError != nil },
@@ -36,6 +38,12 @@ struct RootView: View {
             Button("好") { appState.activeError = nil }
         } message: {
             Text(appState.activeError ?? "")
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { !hasSeenOnboarding },
+            set: { if !$0 { hasSeenOnboarding = true } }
+        )) {
+            OnboardingView { hasSeenOnboarding = true }
         }
         .task(id: appState.syncSession.account?.id) {
             guard appState.syncSession.account != nil else { return }

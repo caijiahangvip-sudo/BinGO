@@ -1,4 +1,5 @@
 import {
+  createHash,
   createHmac,
   randomBytes,
   scrypt as scryptCallback,
@@ -6,6 +7,7 @@ import {
 } from 'node:crypto';
 import { promisify } from 'node:util';
 import { config } from './config.js';
+import { pool } from './db.js';
 
 const scrypt = promisify(scryptCallback);
 
@@ -15,6 +17,7 @@ export interface AccessClaims {
   sub: string;
   role: AccountRole;
   organizationId: string;
+  sessionId: string;
   exp: number;
 }
 
@@ -38,6 +41,10 @@ export function issueAccessToken(input: Omit<AccessClaims, 'exp'>): string {
   return `${unsigned}.${sign(unsigned)}`;
 }
 
+export function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 export function verifyAccessToken(token: string): AccessClaims {
   const [header, payload, signature] = token.split('.');
   if (!header || !payload || !signature) throw new Error('Invalid access token');
@@ -47,9 +54,26 @@ export function verifyAccessToken(token: string): AccessClaims {
     throw new Error('Invalid access token');
   }
   const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as AccessClaims;
-  if (!claims.sub || !claims.organizationId || claims.exp <= Math.floor(Date.now() / 1000)) {
+  if (!claims.sub || !claims.organizationId || !claims.sessionId || claims.exp <= Math.floor(Date.now() / 1000)) {
     throw new Error('Expired access token');
   }
+  return claims;
+}
+
+export async function verifyActiveAccessToken(token: string): Promise<AccessClaims> {
+  const claims = verifyAccessToken(token);
+  const session = await pool.query(
+    `SELECT 1
+     FROM device_sessions session
+     JOIN accounts account ON account.id = session.account_id
+     WHERE session.id = $1 AND session.account_id = $2
+       AND session.revoked_at IS NULL
+       AND session.refresh_expires_at > now()
+       AND account.disabled_at IS NULL`,
+    [claims.sessionId, claims.sub],
+  );
+  if (!session.rowCount) throw new Error('Session revoked');
+  void pool.query('UPDATE device_sessions SET last_seen_at = now() WHERE id = $1', [claims.sessionId]);
   return claims;
 }
 

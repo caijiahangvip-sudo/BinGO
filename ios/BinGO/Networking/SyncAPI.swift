@@ -76,7 +76,8 @@ actor SyncAPI {
 
     func learningTasks(baseURL: URL, accessToken: String) async throws -> [LearningTask] {
         struct Response: Codable { let tasks: [LearningTask] }
-        return try await request(baseURL: baseURL, path: "/v1/tasks", accessToken: accessToken).tasks
+        let response: Response = try await request(baseURL: baseURL, path: "/v1/tasks", accessToken: accessToken)
+        return response.tasks
     }
 
     func joinPrimaryClass(baseURL: URL, accessToken: String, inviteCode: String) async throws {
@@ -89,7 +90,8 @@ actor SyncAPI {
             struct Submission: Decodable { let id: String }
             let submission: Submission
         }
-        let _: Response = try await request(baseURL: baseURL, path: "/v1/tasks/\(id)/submissions", method: "POST", accessToken: accessToken, body: ["summary": summary, "evidence": [[String: String]]()])
+        struct Body: Encodable { let summary: String; let evidence: [[String: String]] }
+        let _: Response = try await request(baseURL: baseURL, path: "/v1/tasks/\(id)/submissions", method: "POST", accessToken: accessToken, body: Body(summary: summary, evidence: []))
     }
 
     func joinStudyGroup(baseURL: URL, accessToken: String, inviteCode: String) async throws {
@@ -99,7 +101,8 @@ actor SyncAPI {
 
     func teachingNotifications(baseURL: URL, accessToken: String) async throws -> [TeachingNotification] {
         struct Response: Codable { let notifications: [TeachingNotification] }
-        return try await request(baseURL: baseURL, path: "/v1/notifications", accessToken: accessToken).notifications
+        let response: Response = try await request(baseURL: baseURL, path: "/v1/notifications", accessToken: accessToken)
+        return response.notifications
     }
 
     func markTeachingNotification(baseURL: URL, accessToken: String, id: String) async throws {

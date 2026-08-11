@@ -3,7 +3,7 @@ WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/sync-server/package.json packages/sync-server/package.json
-RUN pnpm install --filter @bingo/sync-server... --frozen-lockfile
+RUN pnpm install --filter @bingo/sync-server... --frozen-lockfile --ignore-scripts
 COPY packages/sync-server packages/sync-server
 RUN pnpm --filter @bingo/sync-server build
 

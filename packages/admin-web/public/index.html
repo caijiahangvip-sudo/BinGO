@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>BinGO Control Center</title>
+    <link rel="stylesheet" href="/styles.css?v=20260811a" />
+  </head>
+  <body>
+    <div id="login" class="login-shell">
+      <form id="login-form" class="login-card">
+        <div class="brand-mark">B</div>
+        <div><div class="eyebrow">BINGO CONTROL CENTER</div><h1>Luppiter 管理中心</h1><p class="muted">BinGO 服务器与学习组织控制台</p></div>
+        <label>管理员用户名<input id="login-username" autocomplete="username" value="Cai" required /></label>
+        <label>管理员密码<span class="password-wrap"><input id="login-password" type="password" autocomplete="current-password" minlength="10" required /><button id="toggle-password" class="password-toggle" type="button" aria-label="显示密码">显示</button></span></label>
+        <button id="login-submit" class="primary wide" type="submit">安全登录</button>
+        <p id="login-error" class="error"></p>
+      </form>
+    </div>
+    <div id="console" class="console hidden">
+      <aside class="sidebar">
+        <div class="brand"><div class="brand-mark small">B</div><div><strong>BinGO</strong><span>Control Center</span></div></div>
+        <div class="release-chip"><span class="status-dot"></span><div><b>Rome</b><small>5.0 · 当前版本</small></div></div>
+        <nav id="navigation">
+          <button data-page="dashboard" class="active"><span>⌂</span>运行总览</button>
+          <button data-page="users"><span>♙</span>用户中心</button>
+          <button data-page="teaching"><span>▤</span>教学组织</button>
+          <button data-page="support"><span>◉</span>授权中心</button>
+          <button data-page="invites"><span>◇</span>分级邀请码</button>
+          <button data-page="server"><span>▣</span>Docker 控制</button>
+          <button data-page="audit"><span>≡</span>审计与告警</button>
+        </nav>
+        <div class="aside-footer"><div><b id="admin-name">Luppiter</b><small>超级管理员</small></div><button id="logout" class="icon-button">退出</button></div>
+      </aside>
+      <main class="main">
+        <header class="topbar"><div><div id="page-eyebrow" class="eyebrow">OVERVIEW</div><h1 id="page-title">运行总览</h1></div><div class="top-actions"><span id="live-pill" class="live-pill"><i></i>实时连接中</span><button id="refresh" class="outline">刷新</button></div></header>
+        <section id="content" class="content"></section>
+      </main>
+    </div>
+    <div id="modal" class="modal hidden"><div class="modal-card"><div class="modal-head"><h2 id="modal-title"></h2><button id="modal-close" class="icon-button">×</button></div><div id="modal-body"></div></div></div>
+    <div id="toast" class="toast hidden"></div>
+    <script type="module" src="/app.js?v=20260811a"></script>
+  </body>
+</html>

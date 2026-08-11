@@ -13,6 +13,9 @@ import { DesktopUpdater } from '@/components/desktop-updater';
 import { DesktopSecretBootstrap } from '@/components/desktop-secret-bootstrap';
 import { DesktopRuntimeGate } from '@/components/desktop-runtime-gate';
 import { IPadRuntimeBootstrap } from '@/components/ipad/ipad-runtime-bootstrap';
+import { SyncRuntimeBootstrap } from '@/components/sync-runtime-bootstrap';
+import { SupportAccessBootstrap } from '@/components/support-access-bootstrap';
+import { OnboardingTour } from '@/components/onboarding/onboarding-tour';
 
 export const metadata: Metadata = {
   title: 'BinGo',
@@ -38,9 +41,12 @@ export default function RootLayout({
             <DesktopRuntimeGate>
               <LocalSeedBootstrap />
               <ServerProvidersInit />
+              <SyncRuntimeBootstrap />
+              <SupportAccessBootstrap />
               {children}
               <DesktopSecretBootstrap />
               <DesktopUpdater />
+              <OnboardingTour />
             </DesktopRuntimeGate>
             <Toaster position="top-center" />
           </I18nProvider>

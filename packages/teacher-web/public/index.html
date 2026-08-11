@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#246bce" />
+    <title>BinGO 教师端</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <section id="auth" class="auth-shell">
+      <div class="auth-card">
+        <div class="brand-mark">B</div>
+        <div><div class="eyebrow">BINGO TEACHER</div><h1>BinGO 教师端</h1><p>自由自学目标、成果批改与学习陪伴</p></div>
+        <div class="segmented"><button data-mode="login" class="active">登录</button><button data-mode="register">教师邀请码注册</button></div>
+        <form id="auth-form" class="stack">
+          <label id="invite-field" class="hidden">教师邀请码<input id="invite-code" autocomplete="off" /></label>
+          <label>用户名<input id="username" autocomplete="username" required /></label>
+          <label>密码<input id="password" type="password" minlength="10" autocomplete="current-password" required /></label>
+          <button class="primary" type="submit">进入教师端</button>
+          <p id="auth-error" class="error"></p>
+        </form>
+      </div>
+    </section>
+    <div id="app" class="app hidden">
+      <aside>
+        <div class="brand"><div class="brand-mark small">B</div><div><strong>BinGO</strong><span>教师端</span></div></div>
+        <nav id="nav"><button data-page="dashboard" class="active">总览</button><button data-page="tasks">学习目标</button><button data-page="students">学生</button><button data-page="groups">学习小组</button><button data-page="messages">消息</button><button data-page="notifications">通知</button></nav>
+        <div class="account"><b id="account-name">教师</b><span id="account-role"></span><button id="logout">退出</button></div>
+      </aside>
+      <main><header><div><div id="page-eyebrow" class="eyebrow">OVERVIEW</div><h1 id="page-title">总览</h1></div><button id="refresh">刷新</button></header><section id="content"></section></main>
+    </div>
+    <div id="modal" class="modal hidden"><div class="modal-card"><div class="modal-head"><h2 id="modal-title"></h2><button id="modal-close">×</button></div><div id="modal-body"></div></div></div>
+    <div id="toast" class="toast hidden"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
