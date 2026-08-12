@@ -69,6 +69,12 @@ struct NativePencilCanvas: UIViewRepresentable {
         if toolPickerVisible { canvas.becomeFirstResponder() }
     }
 
+    static func dismantleUIView(_ canvas: PKCanvasView, coordinator: Coordinator) {
+        coordinator.toolPicker.setVisible(false, forFirstResponder: canvas)
+        coordinator.toolPicker.removeObserver(canvas)
+        canvas.resignFirstResponder()
+    }
+
     final class Coordinator: NSObject, PKCanvasViewDelegate {
         var parent: NativePencilCanvas
         let toolPicker = PKToolPicker()
