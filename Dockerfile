@@ -2,7 +2,8 @@
 FROM node:22-alpine AS base
 
 RUN apk add --no-cache libc6-compat
-RUN corepack enable && corepack prepare pnpm@10.28.0 --activate
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+RUN corepack enable && corepack prepare pnpm@10.28.0 --activate &&     pnpm config set registry https://registry.npmmirror.com
 
 WORKDIR /app
 
