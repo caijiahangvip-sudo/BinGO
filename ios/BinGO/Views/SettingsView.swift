@@ -11,11 +11,17 @@ struct SettingsView: View {
         Form {
             ServerAndSyncView()
             Section("AI 与处理 API") {
-                TextField("API 地址", text: $baseURL, prompt: Text("https://api.example.com"))
+                TextField("API 地址", text: $baseURL, prompt: Text(APIConfiguration.defaultBaseURL))
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
-                SecureField("API Token", text: $token)
+                SecureField("API Token（通常留空）", text: $token)
                 Button(isSaving ? "正在验证" : "保存并验证") {
+                    Task { await save() }
+                }
+                .disabled(isSaving)
+                Button("恢复默认地址") {
+                    baseURL = APIConfiguration.defaultBaseURL
+                    token = ""
                     Task { await save() }
                 }
                 .disabled(isSaving)

@@ -1,6 +1,10 @@
 import Foundation
 
 struct APIConfiguration: Codable, Equatable, Sendable {
+    /// Built-in default BinGO AI API endpoint; used when the user has not
+    /// stored a custom server address.
+    static let defaultBaseURL = "https://api.bingo.mido.site"
+
     var baseURLString: String
     var token: String
 
@@ -14,6 +18,9 @@ struct APIConfiguration: Codable, Equatable, Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
         value.token = value.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.baseURLString.isEmpty {
+            value.baseURLString = Self.defaultBaseURL
+        }
         return value
     }
 
