@@ -118,4 +118,23 @@ actor BinGOAPI {
         }
         return text
     }
+
+    func textbookCatalog() async throws -> [TextbookCatalogNode] {
+        let response: TextbookCatalogResponse = try await client.get("/api/textbooks/catalog")
+        return response.catalog
+    }
+
+    func textbookSearch(keyword: String) async throws -> [TextbookSearchResult] {
+        let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? keyword
+        let response: TextbookSearchResponse = try await client.get("/api/textbooks/search?keyword=\(encoded)")
+        return response.results
+    }
+
+    func downloadTextbook(contentId: String, contentType: String) async throws -> Data {
+        try await client.downloadData(
+            "/api/textbooks/download",
+            body: TextbookDownloadRequest(contentId: contentId, contentType: contentType)
+        )
+    }
 }
+

@@ -279,6 +279,7 @@ struct BookPlanRequest: Encodable, Sendable {
     let fileSize: Int
     let pdfStorageKey: String
     let pdfText: String
+    let pageImages: [String]?
     let language: String
 }
 
@@ -361,4 +362,33 @@ struct OCRObservation: Sendable {
 
 private extension String {
     var nonEmpty: String? { isEmpty ? nil : self }
+}
+
+struct TextbookCatalogNode: Codable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let children: [TextbookCatalogNode]?
+}
+
+struct TextbookCatalogResponse: Decodable, Sendable {
+    let success: Bool
+    let catalog: [TextbookCatalogNode]
+    let updatedAt: String?
+}
+
+struct TextbookSearchResult: Codable, Identifiable, Sendable {
+    let id: String
+    let title: String
+    let contentType: String
+    let pathIds: [String]?
+}
+
+struct TextbookSearchResponse: Decodable, Sendable {
+    let success: Bool
+    let results: [TextbookSearchResult]
+}
+
+struct TextbookDownloadRequest: Encodable, Sendable {
+    let contentId: String
+    let contentType: String
 }

@@ -73,6 +73,16 @@ actor APIClient {
         }
     }
 
+    func downloadData<Body: Encodable & Sendable>(_ path: String, body: Body) async throws -> Data {
+        var request = try request(path: path, method: "POST")
+        request.httpBody = try encoder.encode(body)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 300
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data)
+        return data
+    }
+
     func stream<Body: Encodable & Sendable>(
         _ path: String,
         body: Body
