@@ -18,8 +18,8 @@ const envSchema = z.object({
   BINGO_ADMIN_AGENT_SECRET: z.string().min(32).optional(),
   BINGO_DATA_ENCRYPTION_KEY: z.string().min(64).optional(),
   BINGO_OBJECT_STORAGE_DIR: z.string().default('/data/teacher-objects'),
-  BINGO_RELEASE_VERSION: z.string().default('5.0.0'),
-  BINGO_RELEASE_CODENAME: z.string().default('Rome'),
+  BINGO_RELEASE_VERSION: z.string().default('5.1.0'),
+  BINGO_RELEASE_CODENAME: z.string().default(''),
   BINGO_MODEL_PROFILE: z.string().default('rome-education-v1'),
 });
 
