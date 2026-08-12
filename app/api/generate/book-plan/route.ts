@@ -2,7 +2,8 @@ import { NextRequest } from 'next/server';
 import { nanoid } from 'nanoid';
 import { callLLM } from '@/lib/ai/llm';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
-import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
+import { generateText, type UserContent } from 'ai';
+import { resolveModel, resolveModelFromHeaders } from '@/lib/server/resolve-model';
 import { parseJsonResponse } from '@/lib/generation/json-repair';
 import type {
   BookKnowledgePoint,
@@ -25,6 +26,10 @@ const BOOK_PLAN_HEADING_CHARS = 24000;
 const BOOK_PLAN_MAX_KNOWLEDGE_POINTS = 30;
 const BOOK_PLAN_MAX_LESSONS = 24;
 const BOOK_PLAN_MAX_OUTPUT_TOKENS = 6000;
+const BOOK_PLAN_MAX_PAGE_IMAGES = 8;
+const BOOK_PLAN_VISION_TEXT_THRESHOLD = 500;
+const BOOK_PLAN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const PAGE_IMAGE_DATA_URL_RE = /^data:(image\/(?:png|jpeg|jpg|webp));base64,([a-z0-9+/=\s]+)$/i;
 const MIN_HEADING_LENGTH = 2;
 const MAX_HEADING_LENGTH = 120;
 
@@ -37,6 +42,7 @@ interface BookPlanRequest {
   coverImage?: string;
   coverImageVersion?: number;
   pdfText?: string;
+  pageImages?: string[];
   language?: BookLearningLanguage;
 }
 
@@ -487,6 +493,46 @@ function getBookPlanWarning(language: BookLearningLanguage, reason?: string): st
   return language === 'zh-CN' ? `${base}\u539f\u56e0\uff1a${reason}` : `${base} Reason: ${reason}`;
 }
 
+function parsePageImageDataUrl(dataUrl: string): { base64: string; mediaType: string } | null {
+  const match = dataUrl.match(PAGE_IMAGE_DATA_URL_RE);
+  if (!match) return null;
+  const mediaType = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
+  const base64 = match[2].replace(/\s/g, '');
+  if (Buffer.byteLength(base64, 'base64') > BOOK_PLAN_MAX_IMAGE_BYTES) return null;
+  return { base64, mediaType };
+}
+
+function buildVisionUserPrompt(params: {
+  fileName: string;
+  language: BookLearningLanguage;
+  imageCount: number;
+}) {
+  return [
+    `Book/file name: ${params.fileName}`,
+    `Plan language: ${params.language === 'zh-CN' ? 'Simplified Chinese' : 'English'}`,
+    '',
+    `The attached ${params.imageCount} image(s) are the cover and first pages of a textbook PDF, including its table of contents. The PDF text layer is unusable, so read the images instead.`,
+    'Read the book title from the cover and the chapter/section structure from the table of contents pages, then create a long-term learning plan covering the whole book.',
+    '',
+    'Requirements:',
+    '- Extract the core knowledge points of the whole book in learning order, following the chapter order shown in the table of contents.',
+    '- Cover the full book structure. Do not stop at an introduction or a generic overview.',
+    '- Each knowledge point must include title, chapter title, short summary, difficulty, prerequisites, and estimated minutes.',
+    '- Group knowledge points into multiple 60-minute lessons.',
+    '- Each lesson must follow: 25 minutes lecture, 5 minutes break, 25 minutes practice, 5 minutes summary.',
+    `- Keep the plan concise: at most ${BOOK_PLAN_MAX_KNOWLEDGE_POINTS} knowledge points and at most ${BOOK_PLAN_MAX_LESSONS} lessons.`,
+    '- Use short strings. This is a planning index, not the lesson content itself.',
+    '',
+    'Output JSON shape:',
+    '{',
+    '  "title": "Book title",',
+    '  "summary": "Learning goal summary",',
+    '  "knowledgePoints": [{ "title": "...", "chapterTitle": "...", "summary": "...", "difficulty": "easy|medium|hard", "prerequisites": ["..."], "estimatedMinutes": 25 }],',
+    '  "lessons": [{ "title": "...", "objective": "...", "knowledgePointIndexes": [0] }]',
+    '}',
+  ].join('\n');
+}
+
 function buildSystemPrompt(language: BookLearningLanguage) {
   return [
     'You are an AI private tutor curriculum planner.',
@@ -670,27 +716,91 @@ export async function POST(req: NextRequest) {
     const body = (await req.json()) as BookPlanRequest;
     fileName = body.fileName;
 
-    if (!body.fileName || !body.pdfStorageKey || !body.pdfText) {
+    if (
+      !body.fileName ||
+      !body.pdfStorageKey ||
+      (!body.pdfText && (!Array.isArray(body.pageImages) || body.pageImages.length === 0))
+    ) {
       return apiError(
         'MISSING_REQUIRED_FIELD',
         400,
-        'fileName, pdfStorageKey and pdfText are required',
+        'fileName, pdfStorageKey and pdfText (or pageImages) are required',
       );
     }
 
     const language: BookLearningLanguage = body.language === 'en-US' ? 'en-US' : 'zh-CN';
     const { model: languageModel, modelInfo, modelString } = resolveModelFromHeaders(req);
     const effectiveModelInfo = mergeModelInfoFromHeaders(req, modelInfo);
-    const boundedPdfText = body.pdfText;
+    const boundedPdfText = body.pdfText || '';
     const planningContext = buildPlanningPdfContext(boundedPdfText, effectiveModelInfo);
     const maxOutputTokens = getPlanMaxOutputTokens(effectiveModelInfo);
     log.info(
-      `Creating book plan [file="${body.fileName}", model=${modelString}, mode=${planningContext.mode}, contextWindow=${planningContext.contextWindow}, maxInputChars=${planningContext.maxInputChars}, maxOutputTokens=${maxOutputTokens}, pdfChars=${body.pdfText.length}, planningChars=${planningContext.text.length}, headings=${planningContext.headings.length}]`,
+      `Creating book plan [file="${body.fileName}", model=${modelString}, mode=${planningContext.mode}, contextWindow=${planningContext.contextWindow}, maxInputChars=${planningContext.maxInputChars}, maxOutputTokens=${maxOutputTokens}, pdfChars=${boundedPdfText.length}, planningChars=${planningContext.text.length}, headings=${planningContext.headings.length}]`,
     );
 
     let generated: GeneratedBookPlan | null = null;
     let warning: string | undefined;
 
+    const normalizedTextLength = normalizePdfText(boundedPdfText).length;
+    const pageImages = (Array.isArray(body.pageImages) ? body.pageImages : [])
+      .slice(0, BOOK_PLAN_MAX_PAGE_IMAGES)
+      .map(parsePageImageDataUrl)
+      .filter((img): img is { base64: string; mediaType: string } => img !== null);
+
+    if (normalizedTextLength < BOOK_PLAN_VISION_TEXT_THRESHOLD && pageImages.length > 0) {
+      try {
+        const vision = resolveModel({
+          modelString: process.env.DEFAULT_VISION_MODEL?.trim() || 'openai:doubao-seed-2.1-turbo',
+        });
+        log.info(
+          `Using vision model for scanned book [file="${body.fileName}", model=${vision.modelString}, images=${pageImages.length}]`,
+        );
+        const content: UserContent = [
+          {
+            type: 'text',
+            text: buildVisionUserPrompt({
+              fileName: body.fileName,
+              language,
+              imageCount: pageImages.length,
+            }),
+          },
+          ...pageImages.map((img) => ({
+            type: 'image' as const,
+            image: img.base64,
+            mediaType: img.mediaType,
+          })),
+        ];
+        const result = await generateText({
+          model: vision.model,
+          system: buildSystemPrompt(language),
+          messages: [{ role: 'user', content }],
+          maxOutputTokens,
+        });
+        generated = parseJsonResponse<GeneratedBookPlan>(result.text);
+        if (!generated) {
+          warning = getBookPlanWarning(language, "Vision model response was not valid JSON");
+          generated = buildFallbackGeneratedPlan({
+            fileName: body.fileName,
+            language,
+            pdfText: boundedPdfText,
+            headings: planningContext.headings,
+          });
+        }
+      } catch (error) {
+        const failureReason = summarizeGenerationError(error);
+        warning = getBookPlanWarning(language, failureReason);
+        log.warn(
+          `Vision book plan generation failed; falling back to heading-based draft [file="${body.fileName}"${failureReason ? `, reason="${failureReason}"` : ''}]`,
+          error,
+        );
+        generated = buildFallbackGeneratedPlan({
+          fileName: body.fileName,
+          language,
+          pdfText: boundedPdfText,
+          headings: planningContext.headings,
+        });
+      }
+    } else {
     try {
       const result = await callLLM(
         {
@@ -736,6 +846,7 @@ export async function POST(req: NextRequest) {
         pdfText: boundedPdfText,
         headings: planningContext.headings,
       });
+    }
     }
 
     const plan = normalizePlan({

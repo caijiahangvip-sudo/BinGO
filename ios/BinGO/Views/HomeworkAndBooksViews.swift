@@ -152,6 +152,9 @@ struct BookLearningView: View {
     @Query(sort: \ImportedDocument.createdAt, order: .reverse) private var documents: [ImportedDocument]
     @State private var selectedPlanID: UUID?
     @State private var isGenerating = false
+    @State private var showingTextbookLibrary = false
+    @State private var generationMessage = "正在生成整本书学习计划…"
+    private let pdfService = PDFService()
 
     var body: some View {
         NavigationSplitView {
@@ -173,6 +176,10 @@ struct BookLearningView: View {
             }
             .navigationTitle("书本学习")
             .toolbar {
+                Button("教材库", systemImage: "books.vertical") {
+                    showingTextbookLibrary = true
+                }
+                .disabled(isGenerating)
                 Menu("从 PDF 创建", systemImage: "plus") {
                     if documents.isEmpty {
                         Text("请先在 PDF 与 OCR 页面导入教材")
@@ -191,9 +198,15 @@ struct BookLearningView: View {
                 ContentUnavailableView("选择学习计划", systemImage: "book.pages")
             }
         }
+        .sheet(isPresented: $showingTextbookLibrary) {
+            TextbookLibraryView { document in
+                showingTextbookLibrary = false
+                Task { await generatePlan(from: document) }
+            }
+        }
         .overlay {
             if isGenerating {
-                ProgressView("正在生成整本书学习计划…")
+                ProgressView(generationMessage)
                     .padding(20)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
@@ -201,9 +214,18 @@ struct BookLearningView: View {
     }
 
     private func generatePlan(from document: ImportedDocument) async {
-        guard !document.extractedText.isEmpty else {
-            appState.activeError = "这个 PDF 没有可用于生成计划的文本。"
-            return
+        let trimmedText = document.extractedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var pageImages: [String]?
+        if trimmedText.count < 500 {
+            let rendered = await pdfService.renderPageImages(url: URL(fileURLWithPath: document.localPath))
+            guard !rendered.isEmpty else {
+                appState.activeError = "这个 PDF 没有可用于生成计划的文本，也无法渲染页面图片。"
+                return
+            }
+            pageImages = rendered
+            generationMessage = "文字层不可用，正在用视觉模型识别教材封面和目录…"
+        } else {
+            generationMessage = "正在生成整本书学习计划…"
         }
         isGenerating = true
         defer { isGenerating = false }
@@ -216,6 +238,7 @@ struct BookLearningView: View {
                     fileSize: fileSize,
                     pdfStorageKey: "ipad-local:\(document.id.uuidString)",
                     pdfText: document.extractedText,
+                    pageImages: pageImages,
                     language: "zh-CN"
                 )
             )
