@@ -13,7 +13,8 @@
         "languages": ["SimpChinese"],
         "displayLanguageSelector": false,
         "installerHooks": "windows/installer-hooks.nsh",
-        "template": "nsis/installer.nsi"
+        "template": "nsis/installer.nsi",
+        "compression": "zlib"
       }
     }
   },

@@ -11,6 +11,37 @@ permissions:
   attestations: write
 
 jobs:
+  # 质量检查与打包发布并行跑（同一台机器上的两个 runner 实例）。
+  # 发布产物是 draft，quality 失败时不公开即可，无需串行阻塞。
+  quality:
+    runs-on: [self-hosted, windows, x64]
+    env:
+      # 独立的 cargo 缓存目录，避免与 release 构建抢同一个 target 锁
+      CARGO_TARGET_DIR: C:/actions-runner/_cargo-target-test
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          # 保留 node_modules 等本地缓存，pnpm install 变为秒级
+          clean: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Quality checks
+        run: |
+          pnpm exec tsc --noEmit
+          pnpm exec eslint .
+          pnpm exec vitest run
+          pnpm audit --prod --audit-level critical
+          $env:TAURI_CONFIG = '{"bundle":{"resources":[]}}'
+          cargo test --manifest-path src-tauri/Cargo.toml --jobs 1
+
   release-windows:
     runs-on: [self-hosted, windows, x64]
     env:
@@ -19,6 +50,8 @@ jobs:
       CARGO_TARGET_DIR: C:/actions-runner/_cargo-target
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          clean: false
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -43,15 +76,6 @@ jobs:
         env:
           BINGO_GITHUB_OWNER: ${{ github.repository_owner }}
           TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
-
-      - name: Quality checks
-        run: |
-          pnpm exec tsc --noEmit
-          pnpm exec eslint .
-          pnpm exec vitest run
-          pnpm audit --prod --audit-level critical
-          $env:TAURI_CONFIG = '{"bundle":{"resources":[]}}'
-          cargo test --manifest-path src-tauri/Cargo.toml --jobs 1
 
       - name: Build and publish NSIS installer
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4
@@ -110,7 +134,7 @@ jobs:
             'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\BinGO'
           )) {
             $entry = Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue
-            if ($entry.InstallLocation) { $installLocations += $entry.InstallLocation }
+            if ($entry.InstallLocation) { $installLocations += $entry.InstallLocation.Trim('"') }
           }
           $exe = $null
           foreach ($location in ($installLocations | Select-Object -Unique)) {
@@ -119,7 +143,7 @@ jobs:
           }
           if (-not $exe) { throw "Installed BinGO executable not found in expected install locations" }
           $process = Start-Process -FilePath $exe -PassThru
-          Start-Sleep -Seconds 15
+          Start-Sleep -Seconds 5
           if ($process.HasExited) { throw "Installed BinGO exited during smoke test" }
           Stop-Process -Id $process.Id -Force
 
@@ -144,4 +168,14 @@ jobs:
         shell: powershell
         env:
           GH_TOKEN: ${{ secrets.DESKTOP_RELEASE_PAT }}
-        run: gh release upload "${{ github.ref_name }}" artifacts/SHA256SUMS.txt artifacts/bingo-sbom.cdx.json artifacts/chinese-xinhua-ci.json.gz --clobber
+        run: |
+          # GitHub 资产上传不支持断点续传，失败只能整文件重传，因此做 3 次重试
+          $files = @('artifacts/SHA256SUMS.txt', 'artifacts/bingo-sbom.cdx.json', 'artifacts/chinese-xinhua-ci.json.gz')
+          $ok = $false
+          foreach ($attempt in 1..3) {
+            gh release upload "${{ github.ref_name }}" @files --clobber
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "Upload attempt $attempt failed, retrying..."
+            Start-Sleep -Seconds 10
+          }
+          if (-not $ok) { throw "Failed to upload release metadata after 3 attempts" }
