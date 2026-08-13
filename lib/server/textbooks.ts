@@ -1,3 +1,6 @@
+import { readFile, rename, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import { NextResponse } from 'next/server';
 import { proxyFetch } from '@/lib/server/proxy-fetch';
 import type { TextbookCatalogNode, TextbookListItem } from '@/lib/textbooks/types';
@@ -63,6 +66,42 @@ interface CatalogCache {
 }
 
 let catalogCache: CatalogCache | undefined;
+let catalogRebuild: Promise<CatalogCache> | null = null;
+
+// Rebuilding the catalog crawls ~100 part files from the national platform
+// and can take minutes, which is longer than client/gateway timeouts. Keep
+// the last good catalog on disk so cold starts and upstream outages are
+// served instantly from the snapshot while a rebuild runs in background.
+const CATALOG_SNAPSHOT_PATH = path.join(
+  process.env.BINGO_TEXTBOOK_MIRROR_DIR || '/data/textbooks',
+  'catalog-snapshot.json',
+);
+
+async function readCatalogSnapshot(): Promise<CatalogCache | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(CATALOG_SNAPSHOT_PATH, 'utf8')) as Partial<CatalogCache>;
+    if (!Array.isArray(parsed.catalog) || !Array.isArray(parsed.items)) return undefined;
+    return {
+      catalog: parsed.catalog,
+      items: parsed.items,
+      updatedAt: Number(parsed.updatedAt) || 0,
+      // Always treated as stale so a background refresh is triggered.
+      expiresAt: 0,
+      authKey: typeof parsed.authKey === 'string' ? parsed.authKey : 'public',
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function writeCatalogSnapshot(cache: CatalogCache): Promise<void> {
+  try {
+    await writeFile(CATALOG_SNAPSHOT_PATH + '.tmp', JSON.stringify(cache));
+    await rename(CATALOG_SNAPSHOT_PATH + '.tmp', CATALOG_SNAPSHOT_PATH);
+  } catch (error) {
+    console.warn('[textbooks] failed to persist catalog snapshot:', error);
+  }
+}
 
 export type TextbookErrorCode =
   | 'NETWORK_ERROR'
@@ -264,8 +303,33 @@ export async function getTextbookCatalog(accessToken?: string): Promise<CatalogC
     return catalogCache;
   }
 
-  catalogCache = await buildCatalog(accessToken);
-  return catalogCache;
+  if (!catalogCache) {
+    const snapshot = await readCatalogSnapshot();
+    if (snapshot) catalogCache = snapshot;
+  }
+
+  // Single-flight rebuild. Any existing (even stale) cache is served
+  // immediately while the rebuild continues in the background.
+  if (!catalogRebuild) {
+    catalogRebuild = buildCatalog(accessToken)
+      .then(async (fresh) => {
+        catalogCache = fresh;
+        await writeCatalogSnapshot(fresh);
+        return fresh;
+      })
+      .catch((error) => {
+        if (catalogCache) {
+          console.warn('[textbooks] catalog rebuild failed; serving stale cache:', error);
+          return catalogCache;
+        }
+        throw error;
+      })
+      .finally(() => {
+        catalogRebuild = null;
+      });
+  }
+  if (catalogCache) return catalogCache;
+  return catalogRebuild;
 }
 
 function normalizeSearchText(value: string): string {
