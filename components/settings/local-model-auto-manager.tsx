@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   Cpu,
@@ -13,6 +13,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import type { ReactNode } from 'react';
 
@@ -65,6 +66,17 @@ interface Snapshot {
   recommendations: Recommendation[];
 }
 
+interface InstallJobView {
+  jobId: string;
+  status: 'running' | 'succeeded' | 'failed';
+  step: string;
+  progress: number;
+  message: string;
+  done: boolean;
+  currentModelId?: string;
+  error?: string;
+}
+
 const TASK_LABELS: Record<Task, { zh: string; en: string }> = {
   ocr: { zh: '图片 OCR', en: 'Image OCR' },
   document: { zh: '复杂文档', en: 'Complex documents' },
@@ -85,6 +97,9 @@ export function LocalModelAutoManager({ chinese }: { chinese: boolean }) {
   const [activeModel, setActiveModel] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [installJob, setInstallJob] = useState<InstallJobView | null>(null);
+  const pollTimerRef = useRef<number | null>(null);
+  const activePollJobRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -106,10 +121,20 @@ export function LocalModelAutoManager({ chinese }: { chinese: boolean }) {
     void refresh();
   }, [refresh]);
 
+  useEffect(
+    () => () => {
+      if (pollTimerRef.current !== null) window.clearTimeout(pollTimerRef.current);
+      activePollJobRef.current = null;
+    },
+    [],
+  );
+
   const stateMap = useMemo(
     () => new Map(snapshot?.states.map((state) => [state.id, state]) ?? []),
     [snapshot?.states],
   );
+
+  const installingModelId = installJob && !installJob.done ? installJob.currentModelId || '' : '';
 
   const savePreferences = useCallback(
     async (next: Snapshot['preferences']) => {
@@ -138,6 +163,62 @@ export function LocalModelAutoManager({ chinese }: { chinese: boolean }) {
     [refresh, snapshot],
   );
 
+  const pollInstallJob = useCallback(
+    async (jobId: string) => {
+      activePollJobRef.current = jobId;
+      let nextDelay = 2000;
+      try {
+        const response = await fetch(
+          `/api/local-services/models?jobId=${encodeURIComponent(jobId)}`,
+          { cache: 'no-store' },
+        );
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) {
+          if (response.status === 404) {
+            activePollJobRef.current = null;
+            setInstallJob(null);
+            setActiveModel('');
+            setError(chinese ? '安装任务不存在或已过期。' : 'The install job was not found.');
+            return;
+          }
+          throw new Error(data.details || data.error || response.statusText);
+        }
+
+        nextDelay = data.pollIntervalMs || nextDelay;
+        setInstallJob({
+          jobId,
+          status: data.status,
+          step: data.step,
+          progress: Number(data.progress) || 0,
+          message: data.message || '',
+          done: data.done === true,
+          currentModelId: data.currentModelId,
+          error: data.error,
+        });
+
+        if (data.done) {
+          activePollJobRef.current = null;
+          setInstallJob(null);
+          setActiveModel('');
+          if (data.status === 'succeeded') {
+            setNotice(chinese ? '模型服务已经准备完成。' : 'The model service is ready.');
+            await refresh();
+          } else {
+            setError(data.error || (chinese ? '模型安装失败。' : 'Model installation failed.'));
+          }
+          return;
+        }
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
+
+      if (activePollJobRef.current === jobId) {
+        pollTimerRef.current = window.setTimeout(() => void pollInstallJob(jobId), nextDelay);
+      }
+    },
+    [chinese, refresh],
+  );
+
   const operate = useCallback(
     async (action: 'install' | 'stop', modelId: string) => {
       setActiveModel(modelId);
@@ -152,23 +233,28 @@ export function LocalModelAutoManager({ chinese }: { chinese: boolean }) {
         const result = await response.json();
         if (!response.ok || !result.success)
           throw new Error(result.details || result.error || response.statusText);
-        setNotice(
-          action === 'install'
-            ? chinese
-              ? '模型服务已经准备完成。'
-              : 'The model service is ready.'
-            : chinese
-              ? '模型服务已经停止。'
-              : 'The model service has stopped.',
-        );
+        if (action === 'install' && result.jobId) {
+          setInstallJob({
+            jobId: result.jobId,
+            status: 'running',
+            step: 'starting',
+            progress: 0,
+            message: chinese ? '正在启动模型服务…' : 'Starting model service…',
+            done: false,
+            currentModelId: modelId,
+          });
+          void pollInstallJob(result.jobId);
+          return;
+        }
+        setNotice(chinese ? '模型服务已经停止。' : 'The model service has stopped.');
         await refresh();
+        setActiveModel('');
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : String(reason));
-      } finally {
         setActiveModel('');
       }
     },
-    [chinese, refresh],
+    [chinese, pollInstallJob, refresh],
   );
 
   const prepareRecommended = useCallback(async () => {
@@ -184,18 +270,25 @@ export function LocalModelAutoManager({ chinese }: { chinese: boolean }) {
       const result = await response.json();
       if (!response.ok || !result.success)
         throw new Error(result.details || result.error || response.statusText);
-      setNotice(
-        chinese
-          ? `推荐已应用；新准备 ${result.installed.length} 个模型，跳过 ${result.skipped.length} 个。`
-          : `Recommendations applied; prepared ${result.installed.length} model(s), skipped ${result.skipped.length}.`,
-      );
+      if (result.jobId) {
+        setInstallJob({
+          jobId: result.jobId,
+          status: 'running',
+          step: 'starting',
+          progress: 0,
+          message: chinese ? '正在准备推荐模型…' : 'Preparing recommended models…',
+          done: false,
+        });
+        void pollInstallJob(result.jobId);
+        return;
+      }
       await refresh();
+      setActiveModel('');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
       setActiveModel('');
     }
-  }, [chinese, refresh]);
+  }, [chinese, pollInstallJob, refresh]);
 
   const clearCache = useCallback(async () => {
     setActiveModel('clear-cache');
@@ -440,29 +533,38 @@ export function LocalModelAutoManager({ chinese }: { chinese: boolean }) {
                   {selectedModel.availability === 'planned' && (
                     <p className="text-xs text-amber-600 dark:text-amber-400">{copy.planned}</p>
                   )}
-                  {managed && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={activeModel === selectedModel.id}
-                      onClick={() =>
-                        void operate(usableState?.running ? 'stop' : 'install', selectedModel.id)
-                      }
-                    >
-                      {activeModel === selectedModel.id ? (
-                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                      ) : usableState?.running ? (
-                        <Square className="mr-1.5 h-3.5 w-3.5" />
-                      ) : (
-                        <Download className="mr-1.5 h-3.5 w-3.5" />
-                      )}
-                      {usableState?.running
-                        ? copy.stop
-                        : usableState?.installed
-                          ? copy.install
-                          : copy.install}
-                    </Button>
-                  )}
+                  {managed &&
+                    (installJob && installingModelId === selectedModel.id ? (
+                      <div className="space-y-1.5">
+                        <Progress value={installJob.progress} />
+                        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                          <span className="truncate">{installJob.message}</span>
+                          <span className="shrink-0">{Math.round(installJob.progress)}%</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={activeModel === selectedModel.id || !!installingModelId}
+                        onClick={() =>
+                          void operate(usableState?.running ? 'stop' : 'install', selectedModel.id)
+                        }
+                      >
+                        {activeModel === selectedModel.id ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                        ) : usableState?.running ? (
+                          <Square className="mr-1.5 h-3.5 w-3.5" />
+                        ) : (
+                          <Download className="mr-1.5 h-3.5 w-3.5" />
+                        )}
+                        {usableState?.running
+                          ? copy.stop
+                          : usableState?.installed
+                            ? copy.install
+                            : copy.install}
+                      </Button>
+                    ))}
                   {!managed && usableState?.installed && (
                     <p className="text-xs text-green-600">{copy.ready}</p>
                   )}

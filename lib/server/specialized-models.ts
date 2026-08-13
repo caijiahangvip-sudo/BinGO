@@ -524,7 +524,9 @@ export async function getSpecializedModelManagerSnapshot() {
   };
 }
 
-export async function prepareRecommendedSpecializedModels() {
+export async function prepareRecommendedSpecializedModels(
+  onModelInstallStart?: (modelId: string) => void,
+) {
   const snapshot = await getSpecializedModelManagerSnapshot();
   const stateMap = new Map(snapshot.states.map((state) => [state.id, state]));
   const selectedModels: Partial<Record<SpecializedModelTask, string>> = {};
@@ -551,6 +553,7 @@ export async function prepareRecommendedSpecializedModels() {
       skipped.push({ id: model.id, reason: 'Automatic download limit would be exceeded.' });
       continue;
     }
+    onModelInstallStart?.(model.id);
     await installSpecializedModel(model.id);
     installed.push(model.id);
     downloadBudget -= model.estimatedDiskBytes;

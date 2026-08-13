@@ -138,6 +138,17 @@ const wslRuntimeDefinitions: Record<
   },
 };
 
+/** Log file name and on-disk service directory used to sample install progress. */
+export function getLocalModelServiceInstallMeta(service: LocalModelServiceId): {
+  logName: string;
+  serviceDir: string;
+} {
+  return {
+    logName: serviceDefinitions[service].logName,
+    serviceDir: wslRuntimeDefinitions[service].serviceDir,
+  };
+}
+
 const LOCAL_MODEL_START_PROMISES_KEY = Symbol.for('bingo.localModelService.startPromises');
 
 function getStartPromises(): Map<string, Promise<EnsureLocalModelServiceResult>> {
