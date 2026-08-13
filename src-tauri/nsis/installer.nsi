@@ -450,14 +450,14 @@ Function un.PageConfirm
   ${NSD_CreateLabel} 0 40u 95u 12u "卸载位置："
   Pop $0
 
-  ${NSD_CreateText} 100u 37u -190u 16u "$INSTDIR"
+  ${NSD_CreateText} 100u 37u 65% 16u "$INSTDIR"
   Pop $UninstallDirField
 
-  ${NSD_CreateButton} -80u 37u 70u 16u "浏览..."
+  ${NSD_CreateButton} 100u 58u 70u 16u "浏览..."
   Pop $BrowseBtn
   ${NSD_OnClick} $BrowseBtn un.OnBrowse
 
-  ${NSD_CreateCheckbox} 0 68u 100% 12u "删除应用数据"
+  ${NSD_CreateCheckbox} 0 80u 100% 12u "删除应用数据"
   Pop $DeleteAppDataCheckbox
 
   nsDialogs::Show
