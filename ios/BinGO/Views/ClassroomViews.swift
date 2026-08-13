@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import WebKit
 
 struct ClassroomListView: View {
     @Environment(\.modelContext) private var modelContext
@@ -136,7 +137,7 @@ struct ClassroomDetailView: View {
                     }
                 }
                 .frame(width: 240)
-                NativeSlideCanvas(scene: currentScene)
+                SceneContentView(scene: currentScene)
             }
         }
         .onChange(of: classroom.title) { _, _ in classroom.updatedAt = .now }
@@ -155,7 +156,72 @@ struct ClassroomDetailView: View {
     }
 }
 
-struct NativeSlideCanvas: View {
+/// 按场景 content.type 分发到对应的原生渲染视图；解码失败或无 content 时回退到标题页。
+struct SceneContentView: View {
+    let scene: SceneDTO?
+
+    private var payload: SceneContentPayload? { scene?.decodedContentPayload() }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Group {
+                switch payload?.type {
+                case "slide":
+                    if let canvas = payload?.canvas {
+                        SlideCanvasView(canvas: canvas)
+                    } else {
+                        LegacySceneView(scene: scene)
+                    }
+                case "quiz":
+                    QuizSceneView(questions: payload?.questions ?? [])
+                case "interactive":
+                    InteractiveSceneView(html: payload?.html ?? "")
+                case "pbl":
+                    PBLSceneView(projectConfig: payload?.projectConfig, title: scene?.title)
+                default:
+                    LegacySceneView(scene: scene)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            SpeechTranscriptSection(actions: scene?.actions ?? [])
+        }
+    }
+}
+
+/// 画布下方可折叠的讲稿区（speech actions）。
+private struct SpeechTranscriptSection: View {
+    let actions: [SceneActionDTO]
+
+    private var speechTexts: [String] {
+        actions.filter { $0.type == "speech" }.compactMap(\.displayText)
+    }
+
+    var body: some View {
+        if !speechTexts.isEmpty {
+            DisclosureGroup("讲稿") {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(speechTexts.enumerated()), id: \.offset) { _, text in
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "quote.bubble").foregroundStyle(.blue)
+                                Text(text).font(.callout)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+                }
+                .frame(maxHeight: 180)
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+            .background(Color(uiColor: .systemGroupedBackground))
+        }
+    }
+}
+
+/// 旧数据回退：标题 + 讲稿文字的简单卡片（原 NativeSlideCanvas 的展示形式）。
+private struct LegacySceneView: View {
     let scene: SceneDTO?
 
     var body: some View {
@@ -188,5 +254,144 @@ struct NativeSlideCanvas: View {
                     .frame(maxWidth: proxy.size.width - 48, maxHeight: proxy.size.height - 48)
             }
         }
+    }
+}
+
+/// 测验场景：题干 + 选项按钮，点选后显示对错与解析。
+private struct QuizSceneView: View {
+    let questions: [QuizQuestionPayload]
+    @State private var selections: [String: Int] = [:]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                if questions.isEmpty {
+                    ContentUnavailableView("没有题目", systemImage: "questionmark.circle")
+                }
+                ForEach(Array(questions.enumerated()), id: \.offset) { index, question in
+                    questionCard(index: index, question: question)
+                }
+            }
+            .padding(24)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+    }
+
+    private func questionCard(index: Int, question: QuizQuestionPayload) -> some View {
+        let options = question.optionTexts
+        let selected = selections[question.displayID]
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("\(index + 1). \(question.stemText)")
+                .font(.headline)
+            ForEach(Array(options.enumerated()), id: \.offset) { optionIndex, option in
+                Button {
+                    selections[question.displayID] = optionIndex
+                } label: {
+                    HStack {
+                        Text(option)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if selected == optionIndex {
+                            Image(systemName: isCorrect(option, question: question) ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(isCorrect(option, question: question) ? .green : .red)
+                        }
+                    }
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(optionBackground(optionIndex: optionIndex, option: option, question: question, selected: selected))
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+            if selected != nil, let explanation = question.explanationText {
+                Text("解析：\(explanation)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 14).fill(.white))
+    }
+
+    private func isCorrect(_ option: String, question: QuizQuestionPayload) -> Bool {
+        guard let answer = question.answer else { return false }
+        let answerText = answer.displayString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let optionText = option.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 答案可能是选项文本、字母序号（A/B/C）或数字下标
+        if answerText == optionText { return true }
+        if answerText.count == 1, let letter = answerText.first, letter.isLetter {
+            let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            if let optionIndex = question.optionTexts.firstIndex(of: option),
+               let answerIndex = letters.firstIndex(of: Character(answerText.uppercased())) {
+                return optionIndex == answerIndex
+            }
+        }
+        if let answerIndex = Int(answerText), let optionIndex = question.optionTexts.firstIndex(of: option) {
+            return optionIndex == answerIndex || optionIndex == answerIndex - 1
+        }
+        return false
+    }
+
+    private func optionBackground(optionIndex: Int, option: String, question: QuizQuestionPayload, selected: Int?) -> Color {
+        guard selected == optionIndex else {
+            return Color(uiColor: .secondarySystemGroupedBackground)
+        }
+        return isCorrect(option, question: question) ? Color.green.opacity(0.15) : Color.red.opacity(0.15)
+    }
+}
+
+/// 互动场景：自包含 HTML 用 WKWebView 渲染。
+private struct InteractiveSceneView: View {
+    let html: String
+
+    var body: some View {
+        InteractiveWebView(html: html)
+            .background(Color(uiColor: .systemGroupedBackground))
+    }
+}
+
+private struct InteractiveWebView: UIViewRepresentable {
+    let html: String
+
+    func makeUIView(context: Context) -> WKWebView {
+        WKWebView()
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        webView.loadHTMLString(html, baseURL: URL(string: "https://api.bingo.mido.site"))
+    }
+}
+
+/// PBL 场景：把 projectConfig 要点列成文本卡片。
+private struct PBLSceneView: View {
+    let projectConfig: JSONValue?
+    let title: String?
+
+    private var entries: [(String, String)] {
+        guard case let .object(object) = projectConfig else { return [] }
+        return object.sorted(by: { $0.key < $1.key }).map { ($0.key, $0.value.displayString) }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(title ?? "项目式学习")
+                    .font(.title2.bold())
+                if entries.isEmpty {
+                    ContentUnavailableView("没有项目配置", systemImage: "folder")
+                }
+                ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(entry.0).font(.headline)
+                        Text(entry.1).font(.callout).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(.white))
+                }
+            }
+            .padding(24)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
     }
 }
