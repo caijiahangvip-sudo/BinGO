@@ -56,7 +56,9 @@ jobs:
       - name: Build and publish NSIS installer
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 仓库默认 workflow 权限是 read，GITHUB_TOKEN 无法创建 Release，
+          # 这里改用 PAT 密钥（DESKTOP_RELEASE_PAT）。
+          GITHUB_TOKEN: ${{ secrets.DESKTOP_RELEASE_PAT }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
@@ -140,5 +142,5 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: powershell
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.DESKTOP_RELEASE_PAT }}
         run: gh release upload "${{ github.ref_name }}" artifacts/SHA256SUMS.txt artifacts/bingo-sbom.cdx.json artifacts/chinese-xinhua-ci.json.gz --clobber
