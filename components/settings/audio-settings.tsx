@@ -22,6 +22,7 @@ import {
   getASRSupportedLanguages,
 } from '@/lib/audio/constants';
 import type { TTSProviderId, ASRProviderId } from '@/lib/audio/types';
+import { convertToPcm16WavBlob } from '@/lib/audio/pcm-wav';
 import { Volume2, Mic, MicOff, CheckCircle2, XCircle, Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import azureVoicesData from '@/lib/audio/azure.json';
@@ -348,9 +349,14 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
           mediaRecorder.onstop = async () => {
             stream.getTracks().forEach((track) => track.stop());
 
-            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            let audioBlob: Blob = new Blob(audioChunks, { type: 'audio/webm' });
+            let filename = 'recording.webm';
+            if (asrCompatibleProviderId === 'doubao-asr') {
+              audioBlob = await convertToPcm16WavBlob(audioBlob);
+              filename = 'recording.wav';
+            }
             const formData = new FormData();
-            formData.append('audio', audioBlob, 'recording.webm');
+            formData.append('audio', audioBlob, filename);
             formData.append('providerId', asrProviderId);
             formData.append('compatibleProviderId', asrCompatibleProviderId);
             formData.append('language', asrLanguage);
