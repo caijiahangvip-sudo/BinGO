@@ -21,7 +21,8 @@ export function ServerSettings() {
   const initial = useMemo(() => getSyncConfiguration(), []);
   const [baseUrl, setBaseUrl] = useState(initial.baseUrl);
   const [account, setAccount] = useState<BinGoAccount | null>(initial.account);
-  const [online, setOnline] = useState(false);
+  // null = 尚未检查（避免首次渲染就显示"离线"）
+  const [online, setOnline] = useState<boolean | null>(null);
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [identifier, setIdentifier] = useState('');
   const [inviteCode, setInviteCode] = useState('welcome');
@@ -57,6 +58,17 @@ export function ServerSettings() {
 
   useEffect(() => {
     void loadAccount();
+    // 健康检查只在挂载时跑一次，瞬时失败会一直显示"离线"；
+    // 因此每 30s 复测，并在窗口重新聚焦/网络恢复时立即复测。
+    const recheck = () => void loadAccount();
+    const interval = window.setInterval(recheck, 30_000);
+    window.addEventListener('focus', recheck);
+    window.addEventListener('online', recheck);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', recheck);
+      window.removeEventListener('online', recheck);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -123,8 +135,16 @@ export function ServerSettings() {
             <h3 className="font-semibold">BinGO 同步服务器</h3>
             <p className="text-sm text-muted-foreground">账号、设备和学习数据跨端同步</p>
           </div>
-          <span className={online ? 'text-sm text-green-600' : 'text-sm text-red-500'}>
-            {online ? '在线' : '离线'}
+          <span
+            className={
+              online === null
+                ? 'text-sm text-muted-foreground'
+                : online
+                  ? 'text-sm text-green-600'
+                  : 'text-sm text-red-500'
+            }
+          >
+            {online === null ? '检查中…' : online ? '在线' : '离线'}
           </span>
         </div>
         <Label htmlFor="sync-server-url">服务器地址</Label>
@@ -184,9 +204,7 @@ export function ServerSettings() {
         <>
           <section className="rounded-lg border p-4 space-y-3">
             <h3 className="font-semibold">{account.username || account.displayName}</h3>
-            <p className="text-sm text-muted-foreground">
-              {account.role}
-            </p>
+            <p className="text-sm text-muted-foreground">{account.role}</p>
             <div className="flex gap-2">
               <Button disabled={busy} onClick={syncNow}>
                 立即同步
@@ -225,7 +243,9 @@ export function ServerSettings() {
                       <Button
                         size="sm"
                         onClick={async () => {
-                          await (await createSyncClient(baseUrl)).decideSupportRequest(request.id, 'approve', 'once');
+                          await (
+                            await createSyncClient(baseUrl)
+                          ).decideSupportRequest(request.id, 'approve', 'once');
                           toast.success('已允许管理员读取一次');
                           await loadAccount();
                         }}
@@ -236,10 +256,9 @@ export function ServerSettings() {
                         size="sm"
                         variant="outline"
                         onClick={async () => {
-                          await (await createSyncClient(baseUrl)).decideSupportRequest(
-                            request.id,
-                            'reject',
-                          );
+                          await (
+                            await createSyncClient(baseUrl)
+                          ).decideSupportRequest(request.id, 'reject');
                           toast.success('已拒绝访问申请');
                           await loadAccount();
                         }}
