@@ -37,22 +37,52 @@ struct SlideCanvasView: View {
     }
 
     private func elementSize(_ element: SlideElement) -> CGSize {
-        var width = element.width
-        var height = element.height
         if element.type == "line" {
-            // 线元素可能没有显式宽高，用端点/控制点的包围盒兜底
-            var xs: [Double] = []
-            var ys: [Double] = []
-            for pair in [element.start, element.end, element.curve, element.broken] {
-                if let pair, pair.count >= 2 {
-                    xs.append(pair[0])
-                    ys.append(pair[1])
-                }
-            }
-            if width == nil { width = (xs.max() ?? 0) + 24 }
-            if height == nil { height = (ys.max() ?? 0) + 24 }
+            // line 元素的 width 是描边宽度而不是包围盒宽度，
+            // 尺寸必须从端点/控制点的包围盒计算（对齐桌面端 getLineRenderGeometry）
+            return LineGeometry.frameSize(of: element)
         }
-        return CGSize(width: max(width ?? 40, 1), height: max(height ?? 40, 1))
+        return CGSize(width: max(element.width ?? 40, 1), height: max(element.height ?? 40, 1))
+    }
+}
+
+// MARK: - line 元素几何
+
+/// line 元素的 start/end/curve/broken 是相对 (left, top) 的局部坐标，
+/// 可能包含负值；桌面端会把包围盒负偏移平移回正并加 padding，这里对齐。
+enum LineGeometry {
+    static func padding(of element: SlideElement) -> CGFloat {
+        max((element.width ?? 3) * 2 + 4, 18)
+    }
+
+    static func points(of element: SlideElement) -> [CGPoint] {
+        [element.start, element.end, element.curve, element.broken].compactMap { pair in
+            guard let pair, pair.count >= 2 else { return nil }
+            return CGPoint(x: pair[0], y: pair[1])
+        }
+    }
+
+    /// 绘制时所有点要加上的偏移：负坐标平移 + padding。
+    static func drawOffset(of element: SlideElement) -> CGPoint {
+        let pts = points(of: element)
+        let minX = pts.map(\.x).min() ?? 0
+        let minY = pts.map(\.y).min() ?? 0
+        let pad = padding(of: element)
+        return CGPoint(x: -min(0, minX) + pad, y: -min(0, minY) + pad)
+    }
+
+    static func frameSize(of element: SlideElement) -> CGSize {
+        let pts = points(of: element)
+        guard !pts.isEmpty else { return CGSize(width: 40, height: 40) }
+        let minX = pts.map(\.x).min() ?? 0
+        let maxX = pts.map(\.x).max() ?? 0
+        let minY = pts.map(\.y).min() ?? 0
+        let maxY = pts.map(\.y).max() ?? 0
+        let pad = padding(of: element)
+        return CGSize(
+            width: max(maxX - min(0, minX) + pad * 2, 1),
+            height: max(maxY - min(0, minY) + pad * 2, 1)
+        )
     }
 }
 
@@ -257,7 +287,9 @@ private struct ShapeElementView: View {
                 viewBox: element.viewBox,
                 in: proxy.size
             )
-            let fillColor = Color(hex: element.fill ?? "") ?? (element.fill == nil ? .clear : .gray)
+            let fillColor = (element.fill == nil || element.fill == "none")
+                ? Color.clear
+                : (Color(hex: element.fill ?? "") ?? .gray)
             let outline = element.outline ?? theme?.outline
             ZStack {
                 path.fill(fillColor)
@@ -275,8 +307,8 @@ private struct ShapeElementView: View {
     }
 }
 
-/// SVG path → SwiftUI Path。M/L/H/V/C/S/Q/T/Z 完整支持，
-/// A（椭圆弧）退化为直线到端点，保证不崩。
+/// SVG path → SwiftUI Path。M/L/H/V/C/S/Q/T/Z/A 完整支持，
+/// A（椭圆弧）按 SVG 规范的 endpoint→center 参数化转三次贝塞尔。
 enum SVGPathParser {
     static func path(from string: String, viewBox: [Double]?, in size: CGSize) -> Path {
         let boxWidth = max(viewBox?.first ?? 100, 0.0001)
@@ -387,10 +419,18 @@ enum SVGPathParser {
                 current = target
                 lastControl = control
             case "A":
-                // 椭圆弧：rx ry rot large-arc sweep x y → 退化为直线
-                _ = number(); _ = number(); _ = number(); _ = number(); _ = number()
-                guard let target = point(relative: relative) else { index += 1; continue }
-                path.addLine(to: target)
+                // 椭圆弧：rx ry rot large-arc sweep x y → 按 SVG 规范转三次贝塞尔
+                guard let rx = number(), let ry = number(), let rot = number(),
+                      let largeArcFlag = number(), let sweepFlag = number(),
+                      let tx = number(), let ty = number() else { index += 1; continue }
+                let target = relative
+                    ? CGPoint(x: current.x + tx * scaleX, y: current.y + ty * scaleY)
+                    : CGPoint(x: tx * scaleX, y: ty * scaleY)
+                appendArc(
+                    to: &path, from: current,
+                    rx: rx * scaleX, ry: ry * scaleY, rotation: rot,
+                    largeArc: largeArcFlag != 0, sweep: sweepFlag != 0, to: target
+                )
                 current = target
                 lastControl = nil
             default:
@@ -400,6 +440,92 @@ enum SVGPathParser {
             lastCommand = String(cmd.uppercased().first ?? " ")
         }
         return path
+    }
+
+    /// SVG 椭圆弧 → 三次贝塞尔（SVG 规范 F.6 endpoint→center 参数化，
+    /// 每段 ≤90°，控制柄长度 k = 4/3·tan(θ/4)）。
+    private static func appendArc(
+        to path: inout Path, from p0: CGPoint,
+        rx rxIn: Double, ry ryIn: Double, rotation phiDeg: Double,
+        largeArc: Bool, sweep: Bool, to p1: CGPoint
+    ) {
+        var rx = abs(rxIn)
+        var ry = abs(ryIn)
+        guard rx > 0.0001, ry > 0.0001, hypot(p0.x - p1.x, p0.y - p1.y) > 0.0001 else {
+            path.addLine(to: p1)
+            return
+        }
+
+        let phi = phiDeg * .pi / 180
+        let cosPhi = cos(phi)
+        let sinPhi = sin(phi)
+        let dx2 = (p0.x - p1.x) / 2
+        let dy2 = (p0.y - p1.y) / 2
+        let x1p = cosPhi * dx2 + sinPhi * dy2
+        let y1p = -sinPhi * dx2 + cosPhi * dy2
+
+        // 半径不足时按规范放大
+        let lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry)
+        if lambda > 1 {
+            let s = sqrt(lambda)
+            rx *= s
+            ry *= s
+        }
+
+        let sign: Double = largeArc != sweep ? 1 : -1
+        let numerator = max(rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p, 0)
+        let denominator = rx * rx * y1p * y1p + ry * ry * x1p * x1p
+        let coef = sign * sqrt(numerator / denominator)
+        let cxp = coef * (rx * y1p / ry)
+        let cyp = coef * (-ry * x1p / rx)
+        let cx = cosPhi * cxp - sinPhi * cyp + (p0.x + p1.x) / 2
+        let cy = sinPhi * cxp + cosPhi * cyp + (p0.y + p1.y) / 2
+
+        func vectorAngle(_ ux: Double, _ uy: Double, _ vx: Double, _ vy: Double) -> Double {
+            let dot = ux * vx + uy * vy
+            let len = sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy))
+            var angle = acos(max(-1, min(1, dot / len)))
+            if ux * vy - uy * vx < 0 { angle = -angle }
+            return angle
+        }
+
+        let theta1 = vectorAngle(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry)
+        var deltaTheta = vectorAngle((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry)
+        if !sweep && deltaTheta > 0 { deltaTheta -= 2 * .pi }
+        if sweep && deltaTheta < 0 { deltaTheta += 2 * .pi }
+
+        let segments = max(1, Int(ceil(abs(deltaTheta) / (.pi / 2))))
+        let delta = deltaTheta / Double(segments)
+        let alpha = 4.0 / 3.0 * tan(delta / 4)
+
+        func ellipsePoint(_ t: Double) -> CGPoint {
+            CGPoint(
+                x: cx + rx * cos(t) * cosPhi - ry * sin(t) * sinPhi,
+                y: cy + rx * cos(t) * sinPhi + ry * sin(t) * cosPhi
+            )
+        }
+        func ellipseDerivative(_ t: Double) -> CGVector {
+            CGVector(
+                dx: -rx * sin(t) * cosPhi - ry * cos(t) * sinPhi,
+                dy: -rx * sin(t) * sinPhi + ry * cos(t) * cosPhi
+            )
+        }
+
+        var theta = theta1
+        for _ in 0..<segments {
+            let t1 = theta
+            let t2 = theta + delta
+            let pA = ellipsePoint(t1)
+            let pB = ellipsePoint(t2)
+            let dA = ellipseDerivative(t1)
+            let dB = ellipseDerivative(t2)
+            path.addCurve(
+                to: pB,
+                control1: CGPoint(x: pA.x + alpha * dA.dx, y: pA.y + alpha * dA.dy),
+                control2: CGPoint(x: pB.x - alpha * dB.dx, y: pB.y - alpha * dB.dy)
+            )
+            theta = t2
+        }
     }
 
     private static func tokenize(_ string: String) -> [String] {
@@ -444,15 +570,19 @@ private struct LineElementView: View {
     }
 
     private var strokeStyle: StrokeStyle {
-        StrokeStyle(lineWidth: 3, lineCap: .round, dash: element.style == "dashed" ? [10, 8] : [])
+        StrokeStyle(lineWidth: element.width ?? 3, lineCap: .round, dash: element.style == "dashed" ? [10, 8] : [])
     }
 
     var body: some View {
         Canvas { context, _ in
-            let start = elementPoint(element.start) ?? .zero
-            let end = elementPoint(element.end) ?? CGPoint(x: 100, y: 0)
-            let control = elementPoint(element.curve)
-            let corner = elementPoint(element.broken)
+            let offset = LineGeometry.drawOffset(of: element)
+            func pt(_ pair: [Double]?) -> CGPoint? {
+                elementPoint(pair).map { CGPoint(x: $0.x + offset.x, y: $0.y + offset.y) }
+            }
+            let start = pt(element.start) ?? .zero
+            let end = pt(element.end) ?? CGPoint(x: 100, y: 0)
+            let control = pt(element.curve)
+            let corner = pt(element.broken)
 
             var path = Path()
             path.move(to: start)

@@ -25,6 +25,16 @@ config.plugins.updater.endpoints = [
 config.plugins.updater.pubkey = publicKey;
 await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
+// The Windows override config (tauri.windows.conf.json) replaces updater
+// endpoints wholesale during the Windows build, so keep it in sync too.
+const windowsConfigPath = resolve(root, 'src-tauri', 'tauri.windows.conf.json');
+const windowsConfig = JSON.parse(await readFile(windowsConfigPath, 'utf8'));
+windowsConfig.plugins ??= {};
+windowsConfig.plugins.updater ??= {};
+windowsConfig.plugins.updater.endpoints = config.plugins.updater.endpoints;
+windowsConfig.plugins.updater.pubkey = publicKey;
+await writeFile(windowsConfigPath, `${JSON.stringify(windowsConfig, null, 2)}\n`);
+
 const cargo = await readFile(cargoPath, 'utf8');
 await writeFile(
   cargoPath,
