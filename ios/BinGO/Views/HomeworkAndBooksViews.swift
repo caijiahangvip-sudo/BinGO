@@ -213,6 +213,34 @@ struct BookLearningView: View {
         }
     }
 
+    private func fetchLearnerProfile(excluding fileName: String) -> LearnerProfileDTO? {
+        let bookDescriptor = FetchDescriptor<BookPlanRecord>(
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        let books = ((try? modelContext.fetch(bookDescriptor)) ?? [])
+            .filter { $0.sourceFileName != fileName }
+            .prefix(10)
+            .map {
+                LearnerBookDTO(
+                    title: $0.title,
+                    currentLessonIndex: $0.currentLessonIndex,
+                    totalLessons: $0.totalLessons,
+                    notes: $0.notes.isEmpty ? nil : $0.notes
+                )
+            }
+        let homeworkDescriptor = FetchDescriptor<HomeworkRecord>(
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        let homework = ((try? modelContext.fetch(homeworkDescriptor)) ?? [])
+            .prefix(5)
+            .map { LearnerHomeworkDTO(title: $0.title, status: $0.status) }
+        if books.isEmpty && homework.isEmpty { return nil }
+        return LearnerProfileDTO(
+            currentBooks: books.isEmpty ? nil : Array(books),
+            recentHomework: homework.isEmpty ? nil : Array(homework)
+        )
+    }
+
     private func generatePlan(from document: ImportedDocument) async {
         let trimmedText = document.extractedText.trimmingCharacters(in: .whitespacesAndNewlines)
         var pageImages: [String]?
@@ -239,7 +267,8 @@ struct BookLearningView: View {
                     pdfStorageKey: "ipad-local:\(document.id.uuidString)",
                     pdfText: document.extractedText,
                     pageImages: pageImages,
-                    language: "zh-CN"
+                    language: "zh-CN",
+                    learnerProfile: fetchLearnerProfile(excluding: document.fileName)
                 )
             )
             let remote = response.plan

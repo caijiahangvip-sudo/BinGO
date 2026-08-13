@@ -35,6 +35,23 @@ const MAX_HEADING_LENGTH = 120;
 
 type PlanningSourceMode = 'full' | 'outline';
 
+interface LearnerProfileBook {
+  title?: string;
+  currentLessonIndex?: number;
+  totalLessons?: number;
+  notes?: string;
+}
+
+interface LearnerProfileHomework {
+  title?: string;
+  status?: string;
+}
+
+interface LearnerProfile {
+  currentBooks?: LearnerProfileBook[];
+  recentHomework?: LearnerProfileHomework[];
+}
+
 interface BookPlanRequest {
   fileName?: string;
   fileSize?: number;
@@ -44,6 +61,7 @@ interface BookPlanRequest {
   pdfText?: string;
   pageImages?: string[];
   language?: BookLearningLanguage;
+  learnerProfile?: LearnerProfile;
 }
 
 interface GeneratedKnowledgePoint {
@@ -544,6 +562,74 @@ function buildSystemPrompt(language: BookLearningLanguage) {
   ].join('\n');
 }
 
+const LEARNER_PROFILE_MAX_BOOKS = 10;
+const LEARNER_PROFILE_MAX_HOMEWORK = 5;
+const LEARNER_PROFILE_MAX_CHARS = 1200;
+
+function truncateProfileText(value: string, max: number): string {
+  const clean = value.replace(/\s+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, max)}…` : clean;
+}
+
+// Render the student's current learning state (books in progress, recent
+// homework) as an extra system-prompt section, so the generated plan can
+// stay consistent with what the student has already studied.
+function buildLearnerProfileContext(
+  profile: LearnerProfile | undefined,
+  language: BookLearningLanguage,
+): string {
+  if (!profile) return '';
+  const zh = language === 'zh-CN';
+  const lines: string[] = [];
+
+  const books = (profile.currentBooks || [])
+    .map((book) => ({
+      title: truncateProfileText(book.title || '', 60),
+      current: Math.max(0, book.currentLessonIndex || 0),
+      total: Math.max(0, book.totalLessons || 0),
+      notes: truncateProfileText(book.notes || '', 100),
+    }))
+    .filter((book) => book.title)
+    .slice(0, LEARNER_PROFILE_MAX_BOOKS);
+  if (books.length > 0) {
+    lines.push(zh ? '学生正在学习的教材：' : 'Books the student is currently studying:');
+    for (const book of books) {
+      const progress = book.total > 0
+        ? zh
+          ? `（共 ${book.total} 课，学到第 ${Math.min(book.current, book.total)} 课）`
+          : ` (lesson ${Math.min(book.current, book.total)} of ${book.total})`
+        : '';
+      const notes = book.notes ? (zh ? `；备注：${book.notes}` : `; notes: ${book.notes}`) : '';
+      lines.push(`- 《${book.title}》${progress}${notes}`);
+    }
+  }
+
+  const homework = (profile.recentHomework || [])
+    .map((item) => ({
+      title: truncateProfileText(item.title || '', 60),
+      status: truncateProfileText(item.status || '', 20),
+    }))
+    .filter((item) => item.title)
+    .slice(0, LEARNER_PROFILE_MAX_HOMEWORK);
+  if (homework.length > 0) {
+    lines.push(zh ? '近期作业：' : 'Recent homework:');
+    for (const item of homework) {
+      const status = item.status ? (zh ? `（${item.status}）` : ` (${item.status})`) : '';
+      lines.push(`- ${item.title}${status}`);
+    }
+  }
+
+  if (lines.length === 0) return '';
+  const guidance = zh
+    ? '请参考以上学习进度规划新书的难度与节奏，避免与已掌握内容重复。'
+    : 'Use this learning state to calibrate the difficulty and pacing of the new plan, avoiding content the student has already mastered.';
+  const header = zh ? '\n\n# 学习者当前状态' : '\n\n# Learner current state';
+  const full = [header, ...lines, guidance].join('\n');
+  return full.length > LEARNER_PROFILE_MAX_CHARS
+    ? `${full.slice(0, LEARNER_PROFILE_MAX_CHARS)}\n${guidance}`
+    : full;
+}
+
 function buildUserPrompt(params: {
   fileName: string;
   language: BookLearningLanguage;
@@ -729,13 +815,14 @@ export async function POST(req: NextRequest) {
     }
 
     const language: BookLearningLanguage = body.language === 'en-US' ? 'en-US' : 'zh-CN';
+    const learnerContext = buildLearnerProfileContext(body.learnerProfile, language);
     const { model: languageModel, modelInfo, modelString } = resolveModelFromHeaders(req);
     const effectiveModelInfo = mergeModelInfoFromHeaders(req, modelInfo);
     const boundedPdfText = body.pdfText || '';
     const planningContext = buildPlanningPdfContext(boundedPdfText, effectiveModelInfo);
     const maxOutputTokens = getPlanMaxOutputTokens(effectiveModelInfo);
     log.info(
-      `Creating book plan [file="${body.fileName}", model=${modelString}, mode=${planningContext.mode}, contextWindow=${planningContext.contextWindow}, maxInputChars=${planningContext.maxInputChars}, maxOutputTokens=${maxOutputTokens}, pdfChars=${boundedPdfText.length}, planningChars=${planningContext.text.length}, headings=${planningContext.headings.length}]`,
+      `Creating book plan [file="${body.fileName}", model=${modelString}, mode=${planningContext.mode}, contextWindow=${planningContext.contextWindow}, maxInputChars=${planningContext.maxInputChars}, maxOutputTokens=${maxOutputTokens}, pdfChars=${boundedPdfText.length}, planningChars=${planningContext.text.length}, headings=${planningContext.headings.length}, profileBooks=${body.learnerProfile?.currentBooks?.length ?? 0}, profileHomework=${body.learnerProfile?.recentHomework?.length ?? 0}]`,
     );
 
     let generated: GeneratedBookPlan | null = null;
@@ -772,7 +859,7 @@ export async function POST(req: NextRequest) {
         ];
         const result = await generateText({
           model: vision.model,
-          system: buildSystemPrompt(language),
+          system: buildSystemPrompt(language) + learnerContext,
           messages: [{ role: 'user', content }],
           maxOutputTokens,
         });
@@ -805,7 +892,7 @@ export async function POST(req: NextRequest) {
       const result = await callLLM(
         {
           model: languageModel,
-          system: buildSystemPrompt(language),
+          system: buildSystemPrompt(language) + learnerContext,
           prompt: buildUserPrompt({
             fileName: body.fileName,
             language,

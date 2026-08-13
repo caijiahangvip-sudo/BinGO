@@ -274,6 +274,23 @@ struct CloudTextPayload: Decodable, Sendable {
     let content: String?
 }
 
+struct LearnerBookDTO: Encodable, Sendable {
+    let title: String
+    let currentLessonIndex: Int
+    let totalLessons: Int
+    let notes: String?
+}
+
+struct LearnerHomeworkDTO: Encodable, Sendable {
+    let title: String
+    let status: String
+}
+
+struct LearnerProfileDTO: Encodable, Sendable {
+    let currentBooks: [LearnerBookDTO]?
+    let recentHomework: [LearnerHomeworkDTO]?
+}
+
 struct BookPlanRequest: Encodable, Sendable {
     let fileName: String
     let fileSize: Int
@@ -281,6 +298,7 @@ struct BookPlanRequest: Encodable, Sendable {
     let pdfText: String
     let pageImages: [String]?
     let language: String
+    let learnerProfile: LearnerProfileDTO?
 }
 
 struct BookPlanResponse: Decodable, Sendable {
