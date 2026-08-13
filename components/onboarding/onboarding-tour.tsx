@@ -208,7 +208,10 @@ export function OnboardingTour() {
         if (!next) finish();
       }}
     >
-      <DialogContent className="sm:max-w-[680px] max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden">
+      <DialogContent
+        showCloseButton={false}
+        className="sm:max-w-[680px] max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden"
+      >
         <DialogTitle className="sr-only">新手教程</DialogTitle>
         <DialogDescription className="sr-only">BinGO 学生端新手引导</DialogDescription>
         <div className="flex justify-end px-4 pt-3">
