@@ -6,6 +6,7 @@ struct SettingsView: View {
     @State private var token = ""
     @State private var isSaving = false
     @State private var showingTutorial = false
+    @State private var cloudSpeechEnabled = CloudSpeechSettings.load().cloudEnabled
 
     var body: some View {
         Form {
@@ -25,6 +26,15 @@ struct SettingsView: View {
                     Task { await save() }
                 }
                 .disabled(isSaving)
+            }
+            Section("云端语音") {
+                Toggle("优先使用云端语音（豆包 TTS / ASR）", isOn: $cloudSpeechEnabled)
+                    .onChange(of: cloudSpeechEnabled) { _, newValue in
+                        CloudSpeechSettings(cloudEnabled: newValue).save()
+                    }
+                Text("开启后，语音合成与识别通过 BinGO 服务器调用豆包大模型；失败或断网时自动回落到 iPad 本地语音。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             Section("连接状态") {
                 switch appState.connectivity {
