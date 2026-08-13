@@ -391,7 +391,7 @@ struct TextbookCatalogNode: Codable, Identifiable, Sendable {
 struct TextbookCatalogResponse: Decodable, Sendable {
     let success: Bool
     let catalog: [TextbookCatalogNode]
-    let updatedAt: String?
+    let updatedAt: Double?
 }
 
 struct TextbookSearchResult: Codable, Identifiable, Sendable {
