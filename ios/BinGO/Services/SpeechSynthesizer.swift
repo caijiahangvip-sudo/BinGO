@@ -108,8 +108,9 @@ final class SpeechSynthesizer: NSObject, AVSpeechSynthesizerDelegate, AVAudioPla
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let playerID = ObjectIdentifier(player)
         Task { @MainActor [weak self] in
-            guard let self, self.audioPlayer === player else { return }
+            guard let self, let current = self.audioPlayer, ObjectIdentifier(current) == playerID else { return }
             self.audioPlayer = nil
             self.isCloudPlayback = false
             self.isSpeaking = false
@@ -118,8 +119,9 @@ final class SpeechSynthesizer: NSObject, AVSpeechSynthesizerDelegate, AVAudioPla
     }
 
     nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        let playerID = ObjectIdentifier(player)
         Task { @MainActor [weak self] in
-            guard let self, self.audioPlayer === player else { return }
+            guard let self, let current = self.audioPlayer, ObjectIdentifier(current) == playerID else { return }
             self.audioPlayer = nil
             self.isCloudPlayback = false
             self.isSpeaking = false
