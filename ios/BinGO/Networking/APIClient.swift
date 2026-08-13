@@ -83,6 +83,33 @@ actor APIClient {
         return data
     }
 
+    /// Download with byte-level progress (0.0-1.0). Progress is only reported
+    /// when the server sends a Content-Length header.
+    func downloadData<Body: Encodable & Sendable>(
+        _ path: String,
+        body: Body,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> Data {
+        var request = try request(path: path, method: "POST")
+        request.httpBody = try encoder.encode(body)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 600
+        let delegate = ProgressDownloadDelegate(progress: progress)
+        let localSession = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        defer { localSession.finishTasksAndInvalidate() }
+        let task = localSession.dataTask(with: request)
+        let data: Data = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                delegate.continuation = continuation
+                task.resume()
+            }
+        } onCancel: {
+            task.cancel()
+        }
+        try validate(response: delegate.response ?? task.response ?? URLResponse(), data: data)
+        return data
+    }
+
     func stream<Body: Encodable & Sendable>(
         _ path: String,
         body: Body
@@ -123,6 +150,45 @@ actor APIClient {
 }
 
 private struct EmptyBody: Codable, Sendable {}
+
+private final class ProgressDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    var continuation: CheckedContinuation<Data, Error>?
+    private(set) var response: URLResponse?
+    private var buffer = Data()
+    private var expectedLength: Int64 = -1
+    private let progress: @Sendable (Double) -> Void
+
+    init(progress: @escaping @Sendable (Double) -> Void) {
+        self.progress = progress
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void
+    ) {
+        self.response = response
+        expectedLength = response.expectedContentLength
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        buffer.append(data)
+        if expectedLength > 0 {
+            progress(min(1, Double(buffer.count) / Double(expectedLength)))
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error {
+            continuation?.resume(throwing: error)
+        } else {
+            continuation?.resume(returning: buffer)
+        }
+        continuation = nil
+    }
+}
 
 struct UploadFile: Sendable {
     let fieldName: String

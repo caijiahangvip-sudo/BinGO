@@ -20,8 +20,16 @@ struct DocumentsView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(documents, selection: $selectedDocumentID) { document in
-                Label(document.fileName, systemImage: "doc.richtext").tag(document.id)
+            List(selection: $selectedDocumentID) {
+                ForEach(documents) { document in
+                    Label(document.fileName, systemImage: "doc.richtext").tag(document.id)
+                        .contextMenu {
+                            Button("删除", role: .destructive) { deleteDocument(document) }
+                        }
+                }
+                .onDelete { indexSet in
+                    for index in indexSet { deleteDocument(documents[index]) }
+                }
             }
             .navigationTitle("PDF 与 OCR")
             .toolbar {
@@ -53,6 +61,12 @@ struct DocumentsView: View {
             guard let item else { return }
             Task { await recognize(item) }
         }
+    }
+
+    private func deleteDocument(_ document: ImportedDocument) {
+        if selectedDocumentID == document.id { selectedDocumentID = nil }
+        try? fileStore.deleteFile(atPath: document.localPath)
+        modelContext.delete(document)
     }
 
     private func importPDF(_ url: URL) async {

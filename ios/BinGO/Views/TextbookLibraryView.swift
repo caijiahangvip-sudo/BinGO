@@ -15,6 +15,7 @@ struct TextbookLibraryView: View {
     @State private var isSearching = false
     @State private var hasSearched = false
     @State private var downloadingID: String?
+    @State private var downloadProgress: Double?
     @State private var statusMessage: String?
 
     private let fileStore = LocalFileStore()
@@ -81,9 +82,22 @@ struct TextbookLibraryView: View {
                     ProgressView("正在载入教材目录…")
                 }
                 if downloadingID != nil {
-                    ProgressView("正在下载并导入教材（文件较大，请稍候）…")
-                        .padding(20)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    VStack(spacing: 12) {
+                        if let downloadProgress {
+                            ProgressView(value: downloadProgress)
+                                .frame(width: 260)
+                            Text("正在下载教材 · \(Int(downloadProgress * 100))%")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ProgressView()
+                            Text("正在下载并导入教材（文件较大，请稍候）…")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(20)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                 }
             }
             .task { await loadCatalog() }
@@ -118,10 +132,18 @@ struct TextbookLibraryView: View {
 
     private func download(id: String, title: String, contentType: String) async {
         downloadingID = id
-        defer { downloadingID = nil }
+        downloadProgress = nil
+        defer {
+            downloadingID = nil
+            downloadProgress = nil
+        }
         do {
             let data = try await BinGOAPI(client: appState.apiClient)
-                .downloadTextbook(contentId: id, contentType: contentType)
+                .downloadTextbook(contentId: id, contentType: contentType) { value in
+                    Task { @MainActor in downloadProgress = value }
+                }
+            // 下载完成，进入导入/解析阶段（回到不确定进度）
+            downloadProgress = nil
             let safeName = title
                 .replacingOccurrences(of: "/", with: "-")
                 .replacingOccurrences(of: ":", with: "-")

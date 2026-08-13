@@ -154,11 +154,13 @@ struct BookLearningView: View {
     @State private var isGenerating = false
     @State private var showingTextbookLibrary = false
     @State private var generationMessage = "正在生成整本书学习计划…"
+    @State private var generationStart: Date?
     private let pdfService = PDFService()
 
     var body: some View {
         NavigationSplitView {
-            List(plans, selection: $selectedPlanID) { plan in
+            List(selection: $selectedPlanID) {
+                ForEach(plans) { plan in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(plan.title).font(.headline)
                     ProgressView(value: plan.progress)
@@ -168,6 +170,13 @@ struct BookLearningView: View {
                 }
                 .padding(.vertical, 6)
                 .tag(plan.id)
+                .contextMenu {
+                    Button("删除学习计划", role: .destructive) { deletePlan(plan) }
+                }
+                }
+                .onDelete { indexSet in
+                    for index in indexSet { deletePlan(plans[index]) }
+                }
             }
             .overlay {
                 if plans.isEmpty {
@@ -206,11 +215,31 @@ struct BookLearningView: View {
         }
         .overlay {
             if isGenerating {
-                ProgressView(generationMessage)
-                    .padding(20)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                // 服务端是一次性请求，没有真实进度：用缓动曲线估算（趋向 95%），
+                // 完成后直接消失，不假装精确到 100%。
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let elapsed = generationStart.map { context.date.timeIntervalSince($0) } ?? 0
+                    let estimate = min(0.95, 1 - pow(0.5, elapsed / 60))
+                    VStack(spacing: 12) {
+                        ProgressView(value: estimate)
+                            .frame(width: 260)
+                        Text(generationMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Text("已用 \(Int(elapsed)) 秒")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(20)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
         }
+    }
+
+    private func deletePlan(_ plan: BookPlanRecord) {
+        if selectedPlanID == plan.id { selectedPlanID = nil }
+        modelContext.delete(plan)
     }
 
     private func fetchLearnerProfile(excluding fileName: String) -> LearnerProfileDTO? {
@@ -256,7 +285,11 @@ struct BookLearningView: View {
             generationMessage = "正在生成整本书学习计划…"
         }
         isGenerating = true
-        defer { isGenerating = false }
+        generationStart = .now
+        defer {
+            isGenerating = false
+            generationStart = nil
+        }
         do {
             let attributes = try? FileManager.default.attributesOfItem(atPath: document.localPath)
             let fileSize = (attributes?[.size] as? NSNumber)?.intValue ?? 0
@@ -291,13 +324,33 @@ struct BookLearningView: View {
 }
 
 private struct BookPlanDetailView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(AppState.self) private var appState
     @Bindable var plan: BookPlanRecord
+    @State private var isGeneratingClassroom = false
+    @State private var classroomProgress = ""
+    @State private var classroomNotice: String?
 
     var body: some View {
         List {
             Section {
                 Text(plan.summary).foregroundStyle(.secondary)
                 ProgressView(value: plan.progress)
+                Button {
+                    Task { await generateClassroom(lesson: nil) }
+                } label: {
+                    Label("根据整本书生成课堂", systemImage: "play.rectangle")
+                }
+                .disabled(isGeneratingClassroom)
+                if isGeneratingClassroom {
+                    ProgressView(classroomProgress.isEmpty ? "服务器正在生成课堂…" : classroomProgress)
+                        .font(.footnote)
+                }
+                if let classroomNotice {
+                    Text(classroomNotice)
+                        .font(.footnote)
+                        .foregroundStyle(.green)
+                }
             }
             Section("课程") {
                 ForEach(plan.plan?.lessons ?? []) { lesson in
@@ -305,6 +358,9 @@ private struct BookPlanDetailView: View {
                         Text("第 \(lesson.order) 课 · \(lesson.title)").font(.headline)
                         Text(lesson.objective).foregroundStyle(.secondary)
                         Text(lesson.status).font(.caption).foregroundStyle(.blue)
+                        Button("生成本课课堂") { Task { await generateClassroom(lesson: lesson) } }
+                            .font(.caption)
+                            .disabled(isGeneratingClassroom)
                     }
                     .padding(.vertical, 4)
                 }
@@ -316,5 +372,55 @@ private struct BookPlanDetailView: View {
         }
         .navigationTitle(plan.title)
         .onChange(of: plan.notes) { _, _ in plan.updatedAt = .now }
+    }
+
+    private func generateClassroom(lesson: BookLessonDTO?) async {
+        isGeneratingClassroom = true
+        classroomNotice = nil
+        classroomProgress = "正在提交课堂生成任务…"
+        defer { isGeneratingClassroom = false }
+        do {
+            let requirement = buildClassroomRequirement(lesson: lesson)
+            let remote = try await BinGOAPI(client: appState.apiClient).generateClassroom(
+                request: GenerationRequestDTO(requirement: requirement, language: "zh-CN")
+            ) { job in
+                await MainActor.run {
+                    classroomProgress = job.message.isEmpty ? "服务器正在生成课堂…" : job.message
+                }
+            }
+            let title = lesson.map { "\(plan.title) · 第 \($0.order) 课 \($0.title)" } ?? plan.title
+            let classroom = ClassroomRecord(title: title, summary: remote.stage.description ?? plan.summary)
+            classroom.remoteID = remote.id
+            classroom.stage = remote.stage
+            classroom.scenes = remote.scenes
+            modelContext.insert(classroom)
+            classroomNotice = "课堂已生成，请到「课堂」标签页开始学习"
+        } catch {
+            appState.activeError = error.localizedDescription
+        }
+    }
+
+    private func buildClassroomRequirement(lesson: BookLessonDTO?) -> String {
+        let structure = "请围绕以上内容生成一节 60 分钟课堂（25 分钟讲授 + 5 分钟休息 + 25 分钟练习 + 5 分钟总结）。"
+        if let lesson {
+            let points = lesson.knowledgePointIds.isEmpty ? "（以课程目标为准）" : lesson.knowledgePointIds.joined(separator: "、")
+            return """
+            教材：《\(plan.title)》（\(plan.sourceFileName)）
+            本课：第 \(lesson.order) 课 · \(lesson.title)
+            学习目标：\(lesson.objective)
+            关联知识点：\(points)
+            \(structure)
+            """
+        }
+        let lessonList = (plan.plan?.lessons ?? [])
+            .map { "第 \($0.order) 课 · \($0.title)：\($0.objective)" }
+            .joined(separator: "\n")
+        return """
+        教材：《\(plan.title)》（\(plan.sourceFileName)）
+        全书概要：\(plan.summary)
+        课程大纲：
+        \(lessonList)
+        \(structure)
+        """
     }
 }

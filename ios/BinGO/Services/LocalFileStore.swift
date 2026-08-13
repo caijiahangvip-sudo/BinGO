@@ -13,6 +13,10 @@ actor LocalFileStore {
         return destination
     }
 
+    func deleteFile(atPath path: String) throws {
+        try FileManager.default.removeItem(atPath: path)
+    }
+
     private func applicationSupportDirectory() throws -> URL {
         try fileManager.url(
             for: .applicationSupportDirectory,

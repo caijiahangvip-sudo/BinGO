@@ -130,11 +130,16 @@ actor BinGOAPI {
         return response.results
     }
 
-    func downloadTextbook(contentId: String, contentType: String) async throws -> Data {
-        try await client.downloadData(
-            "/api/textbooks/download",
-            body: TextbookDownloadRequest(contentId: contentId, contentType: contentType)
-        )
+    func downloadTextbook(
+        contentId: String,
+        contentType: String,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> Data {
+        let body = TextbookDownloadRequest(contentId: contentId, contentType: contentType)
+        if let progress {
+            return try await client.downloadData("/api/textbooks/download", body: body, progress: progress)
+        }
+        return try await client.downloadData("/api/textbooks/download", body: body)
     }
 }
 
