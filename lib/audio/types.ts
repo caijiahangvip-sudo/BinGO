@@ -173,7 +173,8 @@ export type BuiltInASRProviderId =
   | 'openai-whisper'
   | 'browser-native'
   | 'qwen-asr'
-  | 'sensevoice-asr';
+  | 'sensevoice-asr'
+  | 'doubao-asr';
 export type ASRProviderId = BuiltInASRProviderId | (string & {});
 // Add new ASR providers below (uncomment and modify):
 // | 'elevenlabs-asr'

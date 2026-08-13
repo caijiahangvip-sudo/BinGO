@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { ASR_PROVIDERS } from '@/lib/audio/constants';
+import { convertToPcm16WavBlob } from '@/lib/audio/pcm-wav';
 import { createLogger } from '@/lib/logger';
 import {
   getSpeechRecognitionErrorMessage,
@@ -45,8 +46,9 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       setIsProcessing(true);
 
       try {
+        let uploadBlob = audioBlob;
+        let uploadFilename = 'recording.webm';
         const formData = new FormData();
-        formData.append('audio', audioBlob, 'recording.webm');
 
         // Get current ASR configuration from settings store
         // Note: This requires importing useSettingsStore in browser context
@@ -56,6 +58,14 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
           const providerConfig = asrProvidersConfig?.[asrProviderId];
           const compatibleProviderId = providerConfig?.compatibleProviderId || asrProviderId;
 
+          // Doubao Seed-ASR requires PCM16 16kHz mono WAV — convert the
+          // webm/opus recording client-side with WebAudio before uploading.
+          if (compatibleProviderId === 'doubao-asr') {
+            uploadBlob = await convertToPcm16WavBlob(audioBlob);
+            uploadFilename = 'recording.wav';
+          }
+
+          formData.append('audio', uploadBlob, uploadFilename);
           formData.append('providerId', asrProviderId);
           formData.append('compatibleProviderId', compatibleProviderId);
           formData.append(

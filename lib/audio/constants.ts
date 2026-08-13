@@ -760,7 +760,9 @@ export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
     id: 'doubao-tts',
     name: '豆包',
     requiresApiKey: true,
-    defaultBaseUrl: 'https://openspeech.bytedance.com/api/v3/tts',
+    // Agent Plan API Key (ark-...); classic appId:accessKey requires the
+    // non-plan base URL https://openspeech.bytedance.com/api/v3/tts
+    defaultBaseUrl: 'https://openspeech.bytedance.com/api/v3/plan/tts',
     icon: '/logos/doubao.svg',
     models: [
       { id: 'seed-tts-2.0', name: '豆包 Seed-TTS 2.0 (Default)' },
@@ -1085,6 +1087,20 @@ export const ASR_PROVIDERS: Record<ASRProviderId, ASRProviderConfig> = {
     defaultModelId: 'iic/SenseVoiceSmall',
     supportedLanguages: ['auto', 'zh', 'yue', 'en', 'ja', 'ko'],
     supportedFormats: ['mp3', 'wav', 'webm', 'm4a', 'flac', 'ogg', 'aac'],
+  },
+
+  'doubao-asr': {
+    id: 'doubao-asr',
+    name: '豆包 ASR (火山引擎 Agent Plan)',
+    requiresApiKey: true,
+    // WebSocket endpoint (resource id volc.seedasr.sauc.duration); requires
+    // PCM16 16kHz mono WAV — clients convert recordings before upload.
+    defaultBaseUrl: 'wss://openspeech.bytedance.com/api/v3/plan/sauc',
+    icon: '/logos/doubao.svg',
+    models: [{ id: 'bigmodel_nostream', name: 'Seed-ASR 大模型 (bigmodel_nostream)' }],
+    defaultModelId: 'bigmodel_nostream',
+    supportedLanguages: ['auto', 'zh', 'en', 'ja', 'ko', 'yue'],
+    supportedFormats: ['wav'],
   },
 
   'browser-native': {

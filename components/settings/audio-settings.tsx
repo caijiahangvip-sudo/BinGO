@@ -53,6 +53,7 @@ function getASRProviderName(providerId: ASRProviderId, t: (key: string) => strin
     'browser-native': t('settings.providerBrowserNative'),
     'qwen-asr': t('settings.providerQwenASR'),
     'sensevoice-asr': t('settings.providerSenseVoiceASR'),
+    'doubao-asr': t('settings.providerDoubaoASR'),
   };
   return names[providerId] || providerId;
 }

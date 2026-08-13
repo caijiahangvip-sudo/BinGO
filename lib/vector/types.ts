@@ -5,6 +5,7 @@
 export type BuiltInVectorProviderId =
   | 'openai-embedding'
   | 'qwen-embedding'
+  | 'doubao-embedding'
   | 'siliconflow';
 export type VectorProviderId = BuiltInVectorProviderId | (string & {});
 

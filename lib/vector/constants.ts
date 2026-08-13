@@ -44,6 +44,15 @@ export const VECTOR_PROVIDERS: Record<BuiltInVectorProviderId, VectorProviderCon
     ],
     defaultModelId: 'text-embedding-v4',
   },
+  'doubao-embedding': {
+    id: 'doubao-embedding',
+    name: 'Doubao Embeddings (Volcengine Agent Plan)',
+    requiresApiKey: true,
+    defaultBaseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+    icon: '/logos/doubao.svg',
+    models: [{ id: 'doubao-embedding-vision', name: 'Doubao Embedding Vision' }],
+    defaultModelId: 'doubao-embedding-vision',
+  },
   siliconflow: {
     id: 'siliconflow',
     name: 'SiliconFlow',

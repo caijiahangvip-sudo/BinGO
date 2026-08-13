@@ -638,24 +638,41 @@ async function generateDoubaoTTS(
   config: TTSModelConfig,
   text: string,
 ): Promise<TTSGenerationResult> {
-  const colonIdx = (config.apiKey || '').indexOf(':');
-  if (colonIdx <= 0) {
-    throw new Error(
-      'Doubao TTS requires API key in format "appId:accessKey". Get both from the Volcengine console.',
-    );
-  }
-  const appId = config.apiKey!.slice(0, colonIdx);
-  const accessKey = config.apiKey!.slice(colonIdx + 1);
+  const baseUrl =
+    config.baseUrl || TTS_PROVIDERS['doubao-tts'].defaultBaseUrl || '';
+  // Volcengine Agent Plan gateways (/plan/ URLs) authenticate with a single
+  // API key (ark-...) via X-Api-Key; the classic openspeech gateway uses a
+  // compound "appId:accessKey" key with X-Api-App-Id / X-Api-Access-Key.
+  const usePlanGateway = baseUrl.includes('/plan/');
 
-  const baseUrl = config.baseUrl || TTS_PROVIDERS['doubao-tts'].defaultBaseUrl;
+  let authHeaders: Record<string, string>;
+  if (usePlanGateway) {
+    if (!config.apiKey) {
+      throw new Error(
+        'Doubao TTS (Agent Plan) requires an API key (ark-...). Get it from the Volcengine console.',
+      );
+    }
+    authHeaders = { 'X-Api-Key': config.apiKey };
+  } else {
+    const colonIdx = (config.apiKey || '').indexOf(':');
+    if (colonIdx <= 0) {
+      throw new Error(
+        'Doubao TTS requires API key in format "appId:accessKey" (classic gateway) or an Agent Plan API key (ark-...) with a /plan/ base URL.',
+      );
+    }
+    authHeaders = {
+      'X-Api-App-Id': config.apiKey!.slice(0, colonIdx),
+      'X-Api-Access-Key': config.apiKey!.slice(colonIdx + 1),
+    };
+  }
+
   const speechRate = Math.round(((config.speed || 1.0) - 1.0) * 100);
 
   const response = await fetch(`${baseUrl}/unidirectional`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Api-App-Id': appId,
-      'X-Api-Access-Key': accessKey,
+      ...authHeaders,
       'X-Api-Resource-Id': 'seed-tts-2.0',
     },
     body: JSON.stringify({

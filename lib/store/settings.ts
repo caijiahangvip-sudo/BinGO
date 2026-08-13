@@ -402,6 +402,7 @@ const getDefaultAudioConfig = () => ({
       modelId: 'iic/SenseVoiceSmall',
       enabled: false,
     },
+    'doubao-asr': { apiKey: '', baseUrl: '', enabled: false },
   } as Record<ASRProviderId, { apiKey: string; baseUrl: string; enabled: boolean }>,
 });
 
@@ -431,6 +432,12 @@ const getDefaultVectorConfig = () => ({
       apiKey: '',
       baseUrl: '',
       modelId: 'text-embedding-v4',
+      enabled: false,
+    },
+    'doubao-embedding': {
+      apiKey: '',
+      baseUrl: '',
+      modelId: 'doubao-embedding-vision',
       enabled: false,
     },
     siliconflow: {

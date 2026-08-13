@@ -147,6 +147,8 @@
 
 import { createOpenAI } from '@ai-sdk/openai';
 import { experimental_transcribe as transcribe } from 'ai';
+import { randomUUID } from 'crypto';
+import { gzipSync, gunzipSync } from 'zlib';
 import type { ASRModelConfig } from './types';
 import { ASR_PROVIDERS } from './constants';
 import { stripEndpointPath } from '@/lib/utils/api-url';
@@ -189,9 +191,284 @@ export async function transcribeAudio(
     case 'sensevoice-asr':
       return await transcribeSenseVoiceASR(config, audioBuffer);
 
+    case 'doubao-asr':
+      return await transcribeDoubaoASR(config, audioBuffer);
+
     default:
       throw new Error(`Unsupported ASR provider: ${config.providerId}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Doubao ASR (Volcengine Seed-ASR via Agent Plan gateway)
+// ---------------------------------------------------------------------------
+
+const DOUBAO_ASR_RESOURCE_ID = 'volc.seedasr.sauc.duration';
+const DOUBAO_ASR_SAMPLE_RATE = 16000;
+const DOUBAO_ASR_SEGMENT_DURATION_MS = 200;
+const DOUBAO_ASR_TIMEOUT_MS = 120_000;
+
+// Binary protocol header nibble values (Volcengine SAUC protocol)
+const DOUBAO_MSG_TYPE_FULL_CLIENT_REQUEST = 0b0001;
+const DOUBAO_MSG_TYPE_AUDIO_ONLY_REQUEST = 0b0010;
+const DOUBAO_MSG_TYPE_FULL_SERVER_RESPONSE = 0b1001;
+const DOUBAO_MSG_TYPE_ERROR_RESPONSE = 0b1111;
+const DOUBAO_FLAG_POS_SEQUENCE = 0b0001;
+const DOUBAO_FLAG_NEG_WITH_SEQUENCE = 0b0011;
+const DOUBAO_SERIALIZATION_JSON = 0b0001;
+const DOUBAO_COMPRESSION_GZIP = 0b0001;
+
+function doubaoAsrHeader(messageType: number, flags: number): Buffer {
+  return Buffer.from([
+    (0b0001 << 4) | 1, // protocol version 1, 4-byte header
+    (messageType << 4) | flags,
+    (DOUBAO_SERIALIZATION_JSON << 4) | DOUBAO_COMPRESSION_GZIP,
+    0x00,
+  ]);
+}
+
+function doubaoAsrFullClientRequest(seq: number): Buffer {
+  const payload = Buffer.from(
+    JSON.stringify({
+      user: { uid: 'bingo' },
+      audio: { format: 'wav', codec: 'raw', rate: DOUBAO_ASR_SAMPLE_RATE, bits: 16, channel: 1 },
+      request: {
+        model_name: 'bigmodel',
+        enable_itn: true,
+        enable_punc: true,
+        enable_ddc: true,
+        show_utterances: true,
+        enable_nonstream: false,
+      },
+    }),
+    'utf-8',
+  );
+  const compressed = gzipSync(payload);
+  const seqBuf = Buffer.alloc(4);
+  seqBuf.writeInt32BE(seq, 0);
+  const sizeBuf = Buffer.alloc(4);
+  sizeBuf.writeUInt32BE(compressed.length, 0);
+  return Buffer.concat([
+    doubaoAsrHeader(DOUBAO_MSG_TYPE_FULL_CLIENT_REQUEST, DOUBAO_FLAG_POS_SEQUENCE),
+    seqBuf,
+    sizeBuf,
+    compressed,
+  ]);
+}
+
+function doubaoAsrAudioRequest(seq: number, segment: Buffer, isLast: boolean): Buffer {
+  const compressed = gzipSync(segment);
+  const seqBuf = Buffer.alloc(4);
+  seqBuf.writeInt32BE(isLast ? -seq : seq, 0);
+  const sizeBuf = Buffer.alloc(4);
+  sizeBuf.writeUInt32BE(compressed.length, 0);
+  return Buffer.concat([
+    doubaoAsrHeader(
+      DOUBAO_MSG_TYPE_AUDIO_ONLY_REQUEST,
+      isLast ? DOUBAO_FLAG_NEG_WITH_SEQUENCE : DOUBAO_FLAG_POS_SEQUENCE,
+    ),
+    seqBuf,
+    sizeBuf,
+    compressed,
+  ]);
+}
+
+interface DoubaoAsrServerResponse {
+  code: number;
+  isLastPackage: boolean;
+  payloadMsg?: {
+    result?: {
+      text?: string;
+      utterances?: Array<{ text?: string }>;
+    };
+  };
+}
+
+function parseDoubaoAsrResponse(msg: Buffer): DoubaoAsrServerResponse {
+  const headerSize = (msg[0] & 0x0f) * 4;
+  const messageType = msg[1] >> 4;
+  const flags = msg[1] & 0x0f;
+  const serialization = msg[2] >> 4;
+  const compression = msg[2] & 0x0f;
+
+  let payload = msg.subarray(headerSize);
+  const response: DoubaoAsrServerResponse = { code: 0, isLastPackage: false };
+
+  if (flags & 0x01) payload = payload.subarray(4); // payload sequence
+  if (flags & 0x02) response.isLastPackage = true;
+  if (flags & 0x04) payload = payload.subarray(4); // event
+
+  if (messageType === DOUBAO_MSG_TYPE_FULL_SERVER_RESPONSE) {
+    payload = payload.subarray(4); // payload size
+  } else if (messageType === DOUBAO_MSG_TYPE_ERROR_RESPONSE) {
+    response.code = payload.readInt32BE(0);
+    payload = payload.subarray(8); // code + payload size
+  }
+
+  if (payload.length === 0) return response;
+
+  if (compression === DOUBAO_COMPRESSION_GZIP) {
+    try {
+      payload = gunzipSync(payload);
+    } catch {
+      return response;
+    }
+  }
+
+  if (serialization === DOUBAO_SERIALIZATION_JSON) {
+    try {
+      response.payloadMsg = JSON.parse(payload.toString('utf-8'));
+    } catch {
+      // Ignore malformed payloads
+    }
+  }
+
+  return response;
+}
+
+/**
+ * Doubao Seed-ASR one-shot transcription (bigmodel_nostream).
+ *
+ * Streams gzip-framed PCM16 16kHz mono WAV audio over WebSocket and resolves
+ * with the final transcription. Audio must already be PCM16 16kHz mono WAV —
+ * clients convert webm/opus recordings via convertToPcm16WavBlob() before
+ * uploading to /api/transcription.
+ */
+async function transcribeDoubaoASR(
+  config: ASRModelConfig,
+  audioBuffer: Buffer | Blob,
+): Promise<ASRTranscriptionResult> {
+  const rawBaseUrl = (
+    config.baseUrl || ASR_PROVIDERS['doubao-asr'].defaultBaseUrl || ''
+  ).trim();
+  const wsUrl = /\/bigmodel_(no)?stream$/.test(rawBaseUrl)
+    ? rawBaseUrl
+    : `${rawBaseUrl.replace(/\/+$/, '')}/bigmodel_nostream`;
+
+  let wavBuffer: Buffer;
+  if (audioBuffer instanceof Buffer) {
+    wavBuffer = audioBuffer;
+  } else if (audioBuffer instanceof Blob) {
+    wavBuffer = Buffer.from(await audioBuffer.arrayBuffer());
+  } else {
+    throw new Error('Invalid audio buffer type');
+  }
+
+  if (
+    wavBuffer.length < 44 ||
+    wavBuffer.toString('ascii', 0, 4) !== 'RIFF' ||
+    wavBuffer.toString('ascii', 8, 12) !== 'WAVE'
+  ) {
+    throw new Error(
+      'Doubao ASR requires WAV audio (PCM16, 16kHz, mono). Convert webm/opus recordings to PCM16 WAV before upload.',
+    );
+  }
+
+  const requestId = randomUUID();
+  // Node 22's native WebSocket (undici) accepts an init bag with headers.
+  const ws = new (WebSocket as unknown as new (
+    url: string,
+    init?: { headers: Record<string, string> },
+  ) => WebSocket)(wsUrl, {
+    headers: {
+      'X-Api-Key': config.apiKey!,
+      'X-Api-Resource-Id': DOUBAO_ASR_RESOURCE_ID,
+      'X-Api-Request-Id': requestId,
+      'X-Api-Connect-Id': requestId,
+      'X-Api-Sequence': '-1',
+    },
+  });
+  ws.binaryType = 'arraybuffer';
+
+  return new Promise<ASRTranscriptionResult>((resolve, reject) => {
+    let settled = false;
+    let audioSent = false;
+    let finalText = '';
+
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch {
+        // Ignore close errors
+      }
+      callback();
+    };
+    const fail = (error: Error) => finish(() => reject(error));
+    const succeed = () => finish(() => resolve({ text: finalText }));
+
+    const timer = setTimeout(() => {
+      fail(new Error('Doubao ASR timed out waiting for the final result'));
+    }, DOUBAO_ASR_TIMEOUT_MS);
+
+    const sendAudio = () => {
+      const segmentSize =
+        ((DOUBAO_ASR_SAMPLE_RATE * 2 * DOUBAO_ASR_SEGMENT_DURATION_MS) / 1000) | 0;
+      let seq = 2; // seq 1 was the full client request
+      for (let offset = 0; offset < wavBuffer.length; offset += segmentSize) {
+        const end = Math.min(offset + segmentSize, wavBuffer.length);
+        const isLast = end >= wavBuffer.length;
+        ws.send(doubaoAsrAudioRequest(seq, wavBuffer.subarray(offset, end), isLast));
+        if (!isLast) seq += 1;
+      }
+    };
+
+    ws.onopen = () => {
+      ws.send(doubaoAsrFullClientRequest(1));
+    };
+
+    ws.onmessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (typeof data === 'string') return;
+      const msg = Buffer.from(data as ArrayBuffer);
+
+      let response: DoubaoAsrServerResponse;
+      try {
+        response = parseDoubaoAsrResponse(msg);
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+
+      if (response.code !== 0) {
+        const detail = response.payloadMsg ? ` ${JSON.stringify(response.payloadMsg)}` : '';
+        fail(new Error(`Doubao ASR error (code ${response.code})${detail}`));
+        return;
+      }
+
+      const resultText = response.payloadMsg?.result?.text;
+      if (typeof resultText === 'string' && resultText) {
+        // bigmodel_nostream returns a single refined result; keep the latest.
+        finalText = resultText;
+      }
+
+      if (response.isLastPackage) {
+        succeed();
+        return;
+      }
+
+      if (!audioSent) {
+        // Handshake ack for the full client request — start streaming audio.
+        audioSent = true;
+        sendAudio();
+      }
+    };
+
+    ws.onerror = () => {
+      fail(new Error('Doubao ASR WebSocket connection error'));
+    };
+
+    ws.onclose = (event: CloseEvent) => {
+      if (settled) return;
+      if (finalText) {
+        succeed();
+      } else {
+        fail(new Error(`Doubao ASR WebSocket closed unexpectedly (code ${event.code})`));
+      }
+    };
+  });
 }
 
 /**

@@ -114,7 +114,9 @@ export async function POST(req: NextRequest) {
 
     const clientBaseUrl = baseUrl || undefined;
     if (clientBaseUrl && process.env.NODE_ENV === 'production') {
-      const ssrfError = validateUrlForSSRF(clientBaseUrl);
+      // WebSocket endpoints (e.g. Doubao ASR wss://) are validated as HTTP(S).
+      const ssrfValidationUrl = clientBaseUrl.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
+      const ssrfError = validateUrlForSSRF(ssrfValidationUrl);
       if (ssrfError) {
         return apiError('INVALID_URL', 403, ssrfError);
       }

@@ -17,6 +17,7 @@ import { ASR_PROVIDERS } from '@/lib/audio/constants';
 import type { ASRProviderId } from '@/lib/audio/types';
 import { Mic, MicOff, CheckCircle2, XCircle, Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { convertToPcm16WavBlob } from '@/lib/audio/pcm-wav';
 import { createLogger } from '@/lib/logger';
 import { ServiceModelManager, type ServiceModelInfo } from './service-model-manager';
 import {
@@ -226,9 +227,15 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
           };
           mediaRecorder.onstop = async () => {
             stream.getTracks().forEach((track) => track.stop());
-            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            let audioBlob: Blob = new Blob(audioChunks, { type: 'audio/webm' });
+            let audioFilename = 'recording.webm';
+            // Doubao Seed-ASR requires PCM16 16kHz mono WAV input.
+            if (compatibleProviderId === 'doubao-asr') {
+              audioBlob = await convertToPcm16WavBlob(audioBlob);
+              audioFilename = 'recording.wav';
+            }
             const formData = new FormData();
-            formData.append('audio', audioBlob, 'recording.webm');
+            formData.append('audio', audioBlob, audioFilename);
             formData.append('providerId', selectedProviderId);
             formData.append('compatibleProviderId', compatibleProviderId);
             formData.append(

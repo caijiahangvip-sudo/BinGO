@@ -182,6 +182,7 @@ function getVectorProviderName(providerId: VectorProviderId, t: (key: string) =>
   const names: Record<string, string> = {
     'openai-embedding': t('settings.providerOpenAIEmbedding'),
     'qwen-embedding': t('settings.providerQwenEmbedding'),
+    'doubao-embedding': t('settings.providerDoubaoEmbedding'),
     siliconflow: t('settings.providerSiliconFlow'),
   };
   return names[providerId] || providerId;

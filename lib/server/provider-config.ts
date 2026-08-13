@@ -56,6 +56,7 @@ const TTS_ENV_MAP: Record<string, string> = {
   TTS_GLM: 'glm-tts',
   TTS_QWEN: 'qwen-tts',
   TTS_COSYVOICE: 'cosyvoice-tts',
+  TTS_DOUBAO: 'doubao-tts',
   TTS_ELEVENLABS: 'elevenlabs-tts',
   TTS_MINIMAX: 'minimax-tts',
 };
@@ -64,6 +65,7 @@ const ASR_ENV_MAP: Record<string, string> = {
   ASR_OPENAI: 'openai-whisper',
   ASR_QWEN: 'qwen-asr',
   ASR_SENSEVOICE: 'sensevoice-asr',
+  ASR_DOUBAO: 'doubao-asr',
 };
 
 const PDF_ENV_MAP: Record<string, string> = {
@@ -73,6 +75,7 @@ const PDF_ENV_MAP: Record<string, string> = {
 const VECTOR_ENV_MAP: Record<string, string> = {
   VECTOR_OPENAI: 'openai-embedding',
   VECTOR_QWEN: 'qwen-embedding',
+  VECTOR_DOUBAO: 'doubao-embedding',
   VECTOR_SILICONFLOW: 'siliconflow',
   BINGO_EMBEDDING: 'chinese-xinhua-local',
 };
@@ -82,7 +85,7 @@ const WEB_SEARCH_ENV_MAP: Record<string, string> = {
 };
 
 const CLIENT_ONLY_LLM_PROVIDER_IDS = new Set(['doubao']);
-const CLIENT_ONLY_TTS_PROVIDER_IDS = new Set(['doubao-tts']);
+const CLIENT_ONLY_TTS_PROVIDER_IDS = new Set<string>();
 
 // ---------------------------------------------------------------------------
 // YAML loading
