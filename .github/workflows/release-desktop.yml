@@ -13,6 +13,10 @@ permissions:
 jobs:
   release-windows:
     runs-on: [self-hosted, windows, x64]
+    env:
+      # cargo 编译缓存放在仓库目录之外，避免 actions/checkout 的 git clean 每次清掉，
+      # 这样自托管 runner 上后续构建可以增量编译（关机重启后仍然有效）。
+      CARGO_TARGET_DIR: C:/actions-runner/_cargo-target
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
