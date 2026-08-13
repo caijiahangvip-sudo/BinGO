@@ -179,3 +179,23 @@ jobs:
             Start-Sleep -Seconds 10
           }
           if (-not $ok) { throw "Failed to upload release metadata after 3 attempts" }
+
+  # 质量检查与打包都成功后，自动公开 draft 并桥接 latest.json 到 v0.4.3，
+  # 发版全程不再需要人工点公开、也不再依赖外部监视脚本。
+  publish:
+    needs: [quality, release-windows]
+    runs-on: [self-hosted, windows, x64]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Publish draft release and bridge updater metadata
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.DESKTOP_RELEASE_PAT }}
+        run: |
+          # 1. 公开 draft release
+          gh release edit "${{ github.ref_name }}" --draft=false
+
+          # 2. 桥接 latest.json 到 v0.4.3（老客户端更新端点写死在那里）
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/bridge" | Out-Null
+          gh release download "${{ github.ref_name }}" -p latest.json -D "$env:RUNNER_TEMP/bridge" --clobber
+          gh release upload v0.4.3 "$env:RUNNER_TEMP/bridge/latest.json" --clobber
