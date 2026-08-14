@@ -99,6 +99,9 @@ jobs:
       - name: Validate package size and create release metadata
         shell: powershell
         run: |
+          # 本机 PSModulePath 里 PowerShell 7 的模块目录排在前面，会导致 5.1 自动加载
+          # Get-FileHash 失败，这里显式从 system32 导入 5.1 自带的 Utility 模块。
+          Import-Module "$env:SystemRoot\system32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1" -Force
           New-Item -ItemType Directory -Force artifacts | Out-Null
           $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'src-tauri/target' }
           $installers = Get-ChildItem "$targetDir/release/bundle/nsis/*.exe"
