@@ -124,12 +124,15 @@ jobs:
       - name: Smoke install desktop client
         shell: powershell
         run: |
-          # 自托管 runner 与用户桌面同机：若已有 BinGO 在运行，NSIS 静默安装会因
-          # 检测到活动实例而中止（"canceled by the user"）。冒烟前先关掉残留实例。
-          Get-Process bingo -ErrorAction SilentlyContinue | Stop-Process -Force
+          # 自托管 runner 与用户桌面同机。两点处理：
+          # 1) /CURRENTUSER 强制每用户安装（LOCALAPPDATA），避免触碰用户的每机器
+          #    C:\BinGO 安装、也避免触发 UAC 提权（无交互会话下提权会被判"取消"）。
+          # 2) 安装前用 taskkill /T 关掉残留实例的整棵进程树（含 node 子进程），
+          #    释放单实例互斥锁与文件占用。
+          taskkill /F /T /IM bingo.exe 2>$null
           Start-Sleep -Seconds 2
           $installer = Get-ChildItem artifacts/*.exe | Select-Object -First 1
-          Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
+          Start-Process -FilePath $installer.FullName -ArgumentList '/S','/CURRENTUSER' -Wait
           $installLocations = @(
             (Join-Path $env:LOCALAPPDATA 'BinGO'),
             (Join-Path $env:ProgramFiles 'BinGO'),
@@ -149,6 +152,9 @@ jobs:
             if (Test-Path $candidate) { $exe = $candidate; break }
           }
           if (-not $exe) { throw "Installed BinGO executable not found in expected install locations" }
+          # 启动冒烟副本前再清一次进程树，确保单实例互斥锁已释放
+          taskkill /F /T /IM bingo.exe 2>$null
+          Start-Sleep -Seconds 1
           $process = Start-Process -FilePath $exe -PassThru
           Start-Sleep -Seconds 5
           if ($process.HasExited) { throw "Installed BinGO exited during smoke test" }
