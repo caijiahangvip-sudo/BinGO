@@ -124,6 +124,10 @@ jobs:
       - name: Smoke install desktop client
         shell: powershell
         run: |
+          # 自托管 runner 与用户桌面同机：若已有 BinGO 在运行，NSIS 静默安装会因
+          # 检测到活动实例而中止（"canceled by the user"）。冒烟前先关掉残留实例。
+          Get-Process bingo -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
           $installer = Get-ChildItem artifacts/*.exe | Select-Object -First 1
           Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
           $installLocations = @(
