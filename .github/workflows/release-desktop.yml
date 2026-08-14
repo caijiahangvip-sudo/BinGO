@@ -129,7 +129,8 @@ jobs:
           #    C:\BinGO 安装、也避免触发 UAC 提权（无交互会话下提权会被判"取消"）。
           # 2) 安装前用 taskkill /T 关掉残留实例的整棵进程树（含 node 子进程），
           #    释放单实例互斥锁与文件占用。
-          taskkill /F /T /IM bingo.exe 2>$null
+          Get-Process bingo -ErrorAction SilentlyContinue | ForEach-Object { taskkill /F /T /PID $_.Id 2>&1 | Out-Null }
+          $LASTEXITCODE = 0
           Start-Sleep -Seconds 2
           $installer = Get-ChildItem artifacts/*.exe | Select-Object -First 1
           Start-Process -FilePath $installer.FullName -ArgumentList '/S','/CURRENTUSER' -Wait
@@ -153,7 +154,8 @@ jobs:
           }
           if (-not $exe) { throw "Installed BinGO executable not found in expected install locations" }
           # 启动冒烟副本前再清一次进程树，确保单实例互斥锁已释放
-          taskkill /F /T /IM bingo.exe 2>$null
+          Get-Process bingo -ErrorAction SilentlyContinue | ForEach-Object { taskkill /F /T /PID $_.Id 2>&1 | Out-Null }
+          $LASTEXITCODE = 0
           Start-Sleep -Seconds 1
           $process = Start-Process -FilePath $exe -PassThru
           Start-Sleep -Seconds 5
