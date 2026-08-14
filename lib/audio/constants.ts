@@ -756,6 +756,31 @@ export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
     },
   },
 
+  'qwen-audio-tts': {
+    id: 'qwen-audio-tts',
+    name: 'Qwen Audio TTS（实时）',
+    requiresApiKey: true,
+    // 实时语音合成走 WebSocket run-task 协议；如账号使用独立业务空间，
+    // 可改为 wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference
+    defaultBaseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference',
+    icon: '/logos/bailian.svg',
+    models: [
+      { id: 'qwen-audio-3.0-tts-plus', name: 'Qwen Audio 3.0 TTS Plus' },
+      { id: 'qwen-audio-3.0-tts-flash', name: 'Qwen Audio 3.0 TTS Flash' },
+    ],
+    defaultModelId: 'qwen-audio-3.0-tts-plus',
+    voices: [
+      {
+        id: 'longanhuan_v3.6',
+        name: '龙安欢 (longanhuan)',
+        language: 'zh-CN',
+        gender: 'female',
+        description: 'qwenAudioLonganhuan',
+      },
+    ],
+    supportedFormats: ['mp3', 'wav', 'pcm'],
+    speedRange: { min: 0.5, max: 2.0, default: 1.0 },
+  },
   'doubao-tts': {
     id: 'doubao-tts',
     name: '豆包',
@@ -1194,6 +1219,7 @@ export const DEFAULT_TTS_VOICES: Record<TTSProviderId, string> = {
   'azure-tts': 'zh-CN-XiaoxiaoNeural',
   'glm-tts': 'tongtong',
   'qwen-tts': 'Cherry',
+  'qwen-audio-tts': 'longanhuan_v3.6',
   'melotts-tts': 'ZH',
   'cosyvoice-tts': 'zero_shot_prompt',
   'doubao-tts': 'zh_female_vv_uranus_bigtts',
@@ -1207,6 +1233,7 @@ export const DEFAULT_TTS_MODELS: Record<TTSProviderId, string> = {
   'azure-tts': '',
   'glm-tts': 'glm-tts',
   'qwen-tts': 'qwen3-tts-flash',
+  'qwen-audio-tts': 'qwen-audio-3.0-tts-plus',
   'melotts-tts': 'melotts-zh',
   'cosyvoice-tts': 'Fun-CosyVoice3-0.5B-2512_RL',
   'doubao-tts': '',

@@ -105,6 +105,7 @@ import {
 import { resolveEndpointUrl } from '@/lib/utils/api-url';
 import { specializedMultipart } from '@/lib/server/specialized-model-client';
 import { resolveSelectedSpecializedModel } from '@/lib/server/specialized-models';
+import { dashscopeRealtimeTTS } from './dashscope-realtime-ws';
 
 /**
  * Result of TTS generation
@@ -197,6 +198,9 @@ export async function generateTTS(
 
     case 'qwen-tts':
       return await generateQwenTTS(config, text);
+
+    case 'qwen-audio-tts':
+      return await generateQwenAudioRealtimeTTS(config, text);
 
     case 'melotts-tts':
       return await generateMeloTTS(config, text);
@@ -424,6 +428,35 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   };
 }
 
+/**
+ * Qwen-Audio-TTS realtime implementation (DashScope WebSocket run-task protocol).
+ *
+ * The qwen-audio-3.0-tts-* models are realtime-only and are not served by the
+ * synchronous multimodal-generation endpoint used by generateQwenTTS, so they
+ * get their own WebSocket path.
+ */
+async function generateQwenAudioRealtimeTTS(
+  config: TTSModelConfig,
+  text: string,
+): Promise<TTSGenerationResult> {
+  const baseUrl = config.baseUrl || TTS_PROVIDERS['qwen-audio-tts'].defaultBaseUrl || '';
+  const model = config.modelId || TTS_PROVIDERS['qwen-audio-tts'].defaultModelId;
+  const speed = Math.min(2.0, Math.max(0.5, config.speed || 1.0));
+
+  const result = await dashscopeRealtimeTTS({
+    url: baseUrl,
+    apiKey: config.apiKey || '',
+    model,
+    voice: config.voice,
+    text,
+    format: 'mp3',
+    sampleRate: 24000,
+    rate: speed,
+  });
+
+  return { audio: result.audio, format: result.format };
+}
+
 async function generateCosyVoiceTTS(
   config: TTSModelConfig,
   text: string,
@@ -638,8 +671,7 @@ async function generateDoubaoTTS(
   config: TTSModelConfig,
   text: string,
 ): Promise<TTSGenerationResult> {
-  const baseUrl =
-    config.baseUrl || TTS_PROVIDERS['doubao-tts'].defaultBaseUrl || '';
+  const baseUrl = config.baseUrl || TTS_PROVIDERS['doubao-tts'].defaultBaseUrl || '';
   // Volcengine Agent Plan gateways (/plan/ URLs) authenticate with a single
   // API key (ark-...) via X-Api-Key; the classic openspeech gateway uses a
   // compound "appId:accessKey" key with X-Api-App-Id / X-Api-Access-Key.

@@ -85,6 +85,7 @@ export type BuiltInTTSProviderId =
   | 'azure-tts'
   | 'glm-tts'
   | 'qwen-tts'
+  | 'qwen-audio-tts'
   | 'melotts-tts'
   | 'cosyvoice-tts'
   | 'doubao-tts'
